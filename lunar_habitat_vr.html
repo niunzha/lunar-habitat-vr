@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Lunar Habitat VR — g4_01</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; font-family: monospace; }
+
+    #overlay {
+      position: fixed; inset: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; background: #000;
+      color: #7df; z-index: 200; transition: opacity 0.8s;
+    }
+    #overlay h1  { font-size: 1.5rem; margin-bottom: 0.5rem; }
+    #overlay p   { font-size: 0.85rem; color: #aaa; max-width: 480px; text-align: center; margin: 0.3rem 0; }
+    #overlay em  { color: #fd9; font-style: normal; }
+    #bar-wrap    { width: 300px; height: 8px; background: #222; border-radius: 4px; margin-top: 1rem; overflow: hidden; }
+    #bar         { height: 100%; width: 0; background: #4af; border-radius: 4px; transition: width 0.2s; }
+    #pct         { font-size: 0.75rem; color: #888; margin-top: 0.3rem; }
+
+    #hud {
+      position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+      color: #cef; font-size: 12px; line-height: 1.5; text-align: center;
+      background: rgba(0,0,20,0.55); padding: 6px 14px; border-radius: 8px;
+      pointer-events: none; z-index: 100; white-space: nowrap;
+    }
+    #boundary-warn {
+      position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%);
+      color: #f74; font-size: 13px; font-weight: bold;
+      background: rgba(60,10,0,0.7); padding: 5px 14px; border-radius: 6px;
+      pointer-events: none; z-index: 100; display: none;
+    }
+  </style>
+</head>
+<body>
+
+<!-- Loading overlay -->
+<div id="overlay">
+  <h1>Lunar Habitat VR</h1>
+  <p>Loading Geant4 geometry…</p>
+  <div id="bar-wrap"><div id="bar"></div></div>
+  <p id="pct">0 %</p>
+  <p style="margin-top:1.2rem;">
+    <em>Serve this folder over HTTP/HTTPS</em> so the WRL file can load.<br>
+    e.g. <code>python3 -m http.server 8080</code> then open on Quest 3 browser.
+  </p>
+</div>
+
+<!-- Desktop HUD (hidden in VR) -->
+<div id="hud">
+  Lunar Habitat VR &nbsp;|&nbsp;
+  <em>Left stick</em>: fly forward/strafe &nbsp;|&nbsp;
+  <em>Right stick X</em>: turn &nbsp;|&nbsp;
+  <em>Right stick Y</em>: up/down<br>
+  Bounded to <em>HabitatAtm</em> (lava tube + module interiors only)
+</div>
+<div id="boundary-warn">⚠ Boundary — HabitatAtm region only</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { VRButton }                  from 'three/addons/webxr/VRButton.js';
+import { XRControllerModelFactory }  from 'three/addons/webxr/XRControllerModelFactory.js';
+import { VRMLLoader }                from 'three/addons/loaders/VRMLLoader.js';
+
+// ────────────────────────────────────────────────────────────────────────────
+// Renderer
+// ────────────────────────────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.xr.enabled = true;
+document.body.appendChild(renderer.domElement);
+document.body.appendChild(VRButton.createButton(renderer));
+
+// ────────────────────────────────────────────────────────────────────────────
+// Scene
+// ────────────────────────────────────────────────────────────────────────────
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x000008);
+// Gentle fog so the tube recedes into darkness
+scene.fog = new THREE.FogExp2(0x000008, 0.006);
+
+// ────────────────────────────────────────────────────────────────────────────
+// Camera
+// ────────────────────────────────────────────────────────────────────────────
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+
+// ────────────────────────────────────────────────────────────────────────────
+// Player rig
+// After the -π/2 rotation around X applied to the loaded WRL object,
+// world space becomes:
+//   +Y  ← upward in the lava tube (toward lunar surface, original z = 0 at y = 0)
+//   -Y  ← deeper underground (modules at y ≈ -71 … -79 m)
+//   ±X  ← east / west (horizontal lava tunnel at y ≈ -75, along X)
+//   ±Z  ← north / south
+//
+// Starting position: 20 m to the side of the module stack (x=20),
+//   at the level of Module A top (y=-65), centered in tube (z=0).
+// ────────────────────────────────────────────────────────────────────────────
+const player = new THREE.Group();
+player.position.set(20, -65, 0);
+scene.add(player);
+player.add(camera);
+
+// ────────────────────────────────────────────────────────────────────────────
+// Lighting
+// ────────────────────────────────────────────────────────────────────────────
+
+// Ambient light
+scene.add(new THREE.AmbientLight(0xffffff, 1.5));
+
+// Skylight from the tube opening above
+const skyLight = new THREE.PointLight(0x7ad5ff, 5.0, 200);
+skyLight.position.set(0, -2, 0);      // just inside the tube top
+scene.add(skyLight);
+
+// Warm habitat interior lights around the module stack
+const habLight1 = new THREE.PointLight(0xfff0cc, 4.0, 40);
+habLight1.position.set(0, -71, 0);    // top of module A
+scene.add(habLight1);
+
+const habLight2 = new THREE.PointLight(0xccf0ff, 2.5, 40);
+habLight2.position.set(0, -77, 0);    // module B / C junction
+scene.add(habLight2);
+
+// Pit bottom — warm orange glow to visually distinguish the floor
+const pitLight = new THREE.PointLight(0xff6600, 4.0, 60);
+pitLight.position.set(0, -91, 0);
+scene.add(pitLight);
+
+// Mid-shaft fill — illuminates basalt walls along the vertical tube
+const tubeLight = new THREE.PointLight(0x8899aa, 3.0, 200);
+tubeLight.position.set(0, -47, 0);    // tube mid-height
+scene.add(tubeLight);
+
+// Extra wall-wash lights staggered around the shaft to reveal basalt texture
+const wallLights = [
+  { pos: [40,  -20, 0],  color: 0x99aacc },
+  { pos: [-40, -20, 0],  color: 0x99aacc },
+  { pos: [0,   -20, 40], color: 0x99aacc },
+  { pos: [0,   -20,-40], color: 0x99aacc },
+  { pos: [40,  -50, 0],  color: 0xaabbcc },
+  { pos: [-40, -50, 0],  color: 0xaabbcc },
+  { pos: [0,   -50, 40], color: 0xaabbcc },
+  { pos: [0,   -50,-40], color: 0xaabbcc },
+];
+wallLights.forEach(({ pos, color }) => {
+  const l = new THREE.PointLight(color, 2.5, 120);
+  l.position.set(...pos);
+  scene.add(l);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Load g4_01.wrl
+// ────────────────────────────────────────────────────────────────────────────
+const SCALE = 0.001;   // mm → m
+
+const overlay = document.getElementById('overlay');
+const bar     = document.getElementById('bar');
+const pct     = document.getElementById('pct');
+
+const loader = new VRMLLoader();
+loader.load(
+  './g4_01.wrl',
+
+  // onLoad
+  (object) => {
+    object.scale.setScalar(SCALE);
+
+    // Rotate so that the tube axis aligns with World-Y (downward = -Y).
+    // Original Geant4 geometry: tube vertical along Z (surface at z=0, deep at z=-95 m).
+    // Rotation by -π/2 around X maps: orig(x,y,z) → world(x, z, -y).
+    // After this, the tube spans world y = 0 (surface) … -95 m (base).
+    object.rotation.x = -Math.PI / 2;
+
+    // Make all faces double-sided and honour the Geant4 transparency values
+    const edgeMat = new THREE.LineBasicMaterial({
+      color: 0x88ccff,
+      transparent: true,
+      opacity: 0.35,
+      depthWrite: false,
+    });
+
+    object.traverse((child) => {
+      if (!child.isMesh) return;
+      const mats = Array.isArray(child.material) ? child.material : [child.material];
+      mats.forEach((m) => {
+        m.side        = THREE.DoubleSide;
+        m.transparent = true;
+        // Geant4 sets opacity=0.3 for most geologies; keep it visible but not opaque
+        if (m.opacity === undefined || m.opacity === 1) m.opacity = 0.55;
+        m.depthWrite  = false;   // transparent overlaps render better without z-fighting
+      });
+
+      // Subtle structural edge lines — only sharp seams (≥20°) show up,
+      // highlighting wall/floor junctions and tube intersections
+      const edges = new THREE.EdgesGeometry(child.geometry, 20);
+      if (edges.attributes.position.count > 0) {
+        child.add(new THREE.LineSegments(edges, edgeMat));
+      }
+    });
+
+    scene.add(object);
+
+    // Fade out the loading overlay
+    overlay.style.opacity = '0';
+    setTimeout(() => { overlay.style.display = 'none'; }, 900);
+  },
+
+  // onProgress
+  (xhr) => {
+    if (xhr.total > 0) {
+      const p = Math.round(xhr.loaded / xhr.total * 100);
+      bar.style.width  = p + '%';
+      pct.textContent  = p + ' %';
+    }
+  },
+
+  // onError
+  (err) => {
+    console.error('WRL load error:', err);
+    pct.textContent = 'Error loading WRL. See console.';
+  }
+);
+
+// ────────────────────────────────────────────────────────────────────────────
+// XR Controllers (Quest 3)
+// ────────────────────────────────────────────────────────────────────────────
+const ctrlFactory = new XRControllerModelFactory();
+
+function addController(index) {
+  const ray  = renderer.xr.getController(index);
+  const grip = renderer.xr.getControllerGrip(index);
+  grip.add(ctrlFactory.createControllerModel(grip));
+
+  // Simple ray line for pointing
+  const geo = new THREE.BufferGeometry().setFromPoints([
+    new THREE.Vector3(0, 0, 0),
+    new THREE.Vector3(0, 0, -2),
+  ]);
+  ray.add(new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0x88ccff, transparent: true, opacity: 0.6 })));
+
+  player.add(ray);
+  player.add(grip);
+  return ray;
+}
+
+addController(0);
+addController(1);
+
+// ────────────────────────────────────────────────────────────────────────────
+// Boundary — HabitatAtm in world metres (post -π/2 X-rotation frame)
+//
+// Original geometry (mm → m):
+//   Vertical shaft  : x²+y²  < 50²,   -95 < z < -5   (Geant4 local coords)
+//   Horizontal tube : |x|<100,  y²+(z+75)² < 20²
+//
+// After rotation (-π/2 around X): orig (x,y,z) → world (x, z, -y)
+// so orig_z = world_y, orig_y = -world_z  →
+//   Vertical shaft  : world_x² + world_z² < 50²,  -95 < world_y < -5
+//   Horizontal tube : |world_x|<100,  world_z²+(world_y+75)² < 20²
+//
+// We use 2–4 m safety margins to keep the user clearly inside.
+// ────────────────────────────────────────────────────────────────────────────
+function inHabitatAtm(x, y, z) {
+  // Vertical skylight shaft — no upper cap so you can fly out of the pit
+  const r2 = x * x + z * z;
+  if (r2 < 47 * 47 && y > -93) return true;
+
+  // Horizontal lava tunnel (along X, centred at y = -75 m)
+  const hr2 = z * z + (y + 75) * (y + 75);
+  if (Math.abs(x) < 97 && hr2 < 17 * 17) return true;
+
+  return false;
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Flight state
+// ────────────────────────────────────────────────────────────────────────────
+const FLYSPEED  = 12;    // m/s
+const TURNSPEED = 1.0;   // rad/s
+
+// Reusable vectors (avoids GC pressure in the animation loop)
+const _headFwd   = new THREE.Vector3();
+const _headRight = new THREE.Vector3();
+const _worldUp   = new THREE.Vector3(0, 1, 0);
+const _proposed  = new THREE.Vector3();
+const _delta     = new THREE.Vector3();
+
+let   boundaryHit   = false;
+let   boundaryTimer = 0;
+const warnEl        = document.getElementById('boundary-warn');
+
+// ────────────────────────────────────────────────────────────────────────────
+// Animation loop
+// ────────────────────────────────────────────────────────────────────────────
+const clock = new THREE.Clock();
+
+renderer.setAnimationLoop(() => {
+  const dt = Math.min(clock.getDelta(), 0.05); // cap at 50 ms
+
+  _delta.set(0, 0, 0);
+  let turnDelta = 0;
+
+  const session = renderer.xr.getSession();
+  if (session) {
+    for (const src of session.inputSources) {
+      if (!src.gamepad) continue;
+      const ax = src.gamepad.axes;
+
+      // Quest 3 / standard XR: axes[2] = thumbstick X, axes[3] = thumbstick Y
+      // (axes[0], axes[1] are touchpad on some controllers — use [2],[3])
+      const stickX = ax.length > 2 ? ax[2] : 0;
+      const stickY = ax.length > 3 ? ax[3] : 0;
+
+      // Dead-zone filter (Quest 3 sticks have ~0.05 drift)
+      const dz = (v) => Math.abs(v) < 0.12 ? 0 : v;
+      const sx = dz(stickX);
+      const sy = dz(stickY);
+
+      if (src.handedness === 'left') {
+        // Move in the direction the head (camera) is looking
+        camera.getWorldDirection(_headFwd);
+        _headRight.crossVectors(_headFwd, _worldUp).normalize();
+
+        // Forward/back: sy negative = push forward on Quest 3 stick
+        _delta.addScaledVector(_headFwd,   -sy * FLYSPEED * dt);
+        // Strafe left/right
+        _delta.addScaledVector(_headRight,  sx * FLYSPEED * dt);
+      }
+
+      if (src.handedness === 'right') {
+        // Turn (yaw) with right stick X
+        turnDelta = -sx * TURNSPEED * dt;
+        // Up/down in world Y with right stick Y (sy positive = push forward = go up)
+        _delta.y -= sy * FLYSPEED * dt;
+      }
+    }
+  }
+
+  // Apply yaw rotation to player
+  if (turnDelta !== 0) {
+    player.rotateY(turnDelta);
+  }
+
+  // Boundary-checked position update
+  _proposed.copy(player.position).add(_delta);
+
+  if (inHabitatAtm(_proposed.x, _proposed.y, _proposed.z)) {
+    player.position.copy(_proposed);
+    boundaryHit = false;
+  } else if (_delta.lengthSq() > 0) {
+    // Try axis-independent sliding (allows sliding along walls)
+    const px = new THREE.Vector3(_proposed.x, player.position.y, player.position.z);
+    const py = new THREE.Vector3(player.position.x, _proposed.y, player.position.z);
+    const pz = new THREE.Vector3(player.position.x, player.position.y, _proposed.z);
+
+    let moved = false;
+    if (inHabitatAtm(px.x, px.y, px.z)) { player.position.x = _proposed.x; moved = true; }
+    if (inHabitatAtm(py.x, py.y, py.z)) { player.position.y = _proposed.y; moved = true; }
+    if (inHabitatAtm(pz.x, pz.y, pz.z)) { player.position.z = _proposed.z; moved = true; }
+
+    if (!moved) {
+      boundaryHit   = true;
+      boundaryTimer = 1.5; // seconds to show warning
+    }
+  }
+
+  // Boundary warning HUD
+  if (boundaryHit && boundaryTimer > 0) {
+    boundaryTimer -= dt;
+    warnEl.style.display = 'block';
+  } else {
+    warnEl.style.display = 'none';
+    boundaryHit = false;
+  }
+
+  renderer.render(scene, camera);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Desktop keyboard fallback (WASD / QE / arrows) for testing without Quest 3
+// ────────────────────────────────────────────────────────────────────────────
+const keys = {};
+window.addEventListener('keydown', (e) => { keys[e.code] = true; });
+window.addEventListener('keyup',   (e) => { keys[e.code] = false; });
+
+// Inject keyboard movement before main loop renders; piggy-back on animationLoop
+// by wrapping it. Use a second RAF for desktop fallback.
+(function desktopFallbackLoop() {
+  requestAnimationFrame(desktopFallbackLoop);
+  if (renderer.xr.isPresenting) return; // XR takes over
+
+  const dt2 = 0.016;
+  const SPD  = 8;
+  const TSPD = 0.8;
+
+  camera.getWorldDirection(_headFwd);
+  _headRight.crossVectors(_headFwd, _worldUp).normalize();
+
+  const move = new THREE.Vector3();
+  if (keys['KeyW'] || keys['ArrowUp'])    move.addScaledVector(_headFwd,    SPD * dt2);
+  if (keys['KeyS'] || keys['ArrowDown'])  move.addScaledVector(_headFwd,   -SPD * dt2);
+  if (keys['KeyA'] || keys['ArrowLeft'])  move.addScaledVector(_headRight, -SPD * dt2);
+  if (keys['KeyD'] || keys['ArrowRight']) move.addScaledVector(_headRight,  SPD * dt2);
+  if (keys['KeyE']) move.y +=  SPD * dt2;
+  if (keys['KeyQ']) move.y -=  SPD * dt2;
+  if (keys['KeyZ']) player.rotateY( TSPD * dt2);
+  if (keys['KeyX']) player.rotateY(-TSPD * dt2);
+
+  const prop = player.position.clone().add(move);
+  if (inHabitatAtm(prop.x, prop.y, prop.z) || prop.y >= -4) {
+    player.position.copy(prop);
+  }
+})();
+
+// ────────────────────────────────────────────────────────────────────────────
+// Resize
+// ────────────────────────────────────────────────────────────────────────────
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+</body>
+</html>

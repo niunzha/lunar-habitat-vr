@@ -1,0 +1,5 @@
+[[headers]]
+  for = "/*.wrl"
+  [headers.values]
+    Content-Type = "model/vrml"
+    Access-Control-Allow-Origin = "*"
