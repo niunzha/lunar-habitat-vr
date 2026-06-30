@@ -32,6 +32,72 @@
       background: rgba(60,10,0,0.7); padding: 5px 14px; border-radius: 6px;
       pointer-events: none; z-index: 100; display: none;
     }
+
+    /* ── Info button ── */
+    #info-btn {
+      position: fixed; top: 14px; right: 14px;
+      width: 28px; height: 28px; border-radius: 50%;
+      background: rgba(0,180,180,0.12);
+      border: 1px solid rgba(0,200,200,0.45);
+      color: #00c8c8; font-size: 14px; font-weight: 500;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      font-family: monospace; z-index: 150;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    #info-btn:hover { background: rgba(0,180,180,0.25); border-color: rgba(0,220,220,0.7); }
+
+    #info-tooltip {
+      position: fixed; top: 14px; right: 50px;
+      background: rgba(0,0,0,0.75); color: #00c8c8;
+      font-family: monospace; font-size: 11px; letter-spacing: 0.05em;
+      padding: 5px 10px; border-radius: 6px; border: 1px solid rgba(0,180,180,0.3);
+      pointer-events: none; z-index: 149;
+      opacity: 0; transition: opacity 0.2s; white-space: nowrap;
+    }
+    #info-btn:hover + #info-tooltip,
+    #info-btn:focus + #info-tooltip { opacity: 1; }
+
+    /* ── Info panel ── */
+    #info-panel {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.6); z-index: 160;
+      font-family: monospace; align-items: center; justify-content: center;
+    }
+    #info-inner {
+      display: flex; flex-direction: row; align-items: flex-start;
+      gap: 28px; max-width: 780px; width: 90%; margin: auto;
+      padding: 48px 28px 32px; position: relative;
+    }
+    #info-close {
+      position: absolute; top: 16px; right: 0;
+      background: transparent; border: none; color: #00b8b8;
+      font-size: 16px; cursor: pointer; opacity: 0.65;
+    }
+    #info-close:hover { opacity: 1; }
+    #info-left { flex: 1; min-width: 0; }
+    #info-label {
+      color: #007777; font-size: 10px; letter-spacing: 0.12em; margin-bottom: 12px;
+    }
+    #info-type {
+      color: #00c8c8; font-size: 12px; line-height: 1.8; white-space: pre-wrap;
+    }
+    #info-cursor {
+      display: inline-block; width: 7px; height: 12px;
+      background: #00c8c8; vertical-align: middle;
+      animation: blink 1s step-end infinite; margin-left: 1px;
+    }
+    #info-img-block {
+      display: none; flex: 0 0 260px; width: 260px;
+      border: 1px solid rgba(0,180,180,0.2); border-radius: 4px; overflow: hidden;
+      align-self: flex-start; margin-top: 22px;
+    }
+    #info-img-block img { width: 100%; display: block; }
+    #info-img-block p {
+      color: #006666; font-size: 10px; margin: 0;
+      padding: 5px 10px; border-top: 1px solid rgba(0,180,180,0.1);
+    }
+    #info-img-block a { color: #008888; }
+    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
   </style>
 </head>
 <body>
@@ -54,9 +120,90 @@
   <em>Left stick</em>: fly forward/strafe &nbsp;|&nbsp;
   <em>Right stick X</em>: turn &nbsp;|&nbsp;
   <em>Right stick Y</em>: up/down<br>
-  Bounded to <em>HabitatAtm</em> (lava tube + module interiors only)
+  Bounded to <em>HabitatAtm</em> (lava tube + module interiors only)<br>
+  <span style="font-size:10px;opacity:0.5;">Sky: <a href="https://www.spacespheremaps.com/hdr-spheremaps/" style="color:#aaa;" target="_blank">spacespheremaps.com</a> &nbsp;|&nbsp; Moon surface: <a href="https://svs.gsfc.nasa.gov/4720" style="color:#aaa;" target="_blank">NASA SVS</a></span>
 </div>
 <div id="boundary-warn">⚠ Boundary — HabitatAtm region only</div>
+
+<!-- Info button -->
+<button id="info-btn" aria-label="Where am I?">?</button>
+<div id="info-tooltip">Where am I?</div>
+
+<!-- Info panel -->
+<div id="info-panel" role="dialog" aria-label="Location information">
+  <div id="info-inner">
+    <button id="info-close" onclick="closeInfo()" aria-label="Close">✕</button>
+    <div id="info-left">
+      <p id="info-label">// LOCATION INFO</p>
+      <div id="info-type"></div>
+      <span id="info-cursor"></span>
+    </div>
+    <div id="info-img-block">
+      <img src="./mare_tranquillitatis_pit.jpg" alt="Example of a lunar lava pit — Mare Tranquillitatis pit" onerror="this.parentElement.style.display='none'"/>
+      <p>Example image: Mare Tranquillitatis pit — <a href="https://en.wikipedia.org/wiki/Mare_Tranquillitatis_pit" target="_blank">Wikipedia / NASA / LROC</a></p>
+    </div>
+  </div>
+</div>
+
+<script>
+const INFO_TEXT =
+`> LOCATION: Lunar lava tube [EXAMPLE]\n` +
+`\n` +
+`Diameter  :  ~100 m\n` +
+`Depth     :  ~90 m\n` +
+`Origin    :  Volcanic lava tube collapse\n` +
+`\n` +
+`Ancient lava tunnels beneath the surface\n` +
+`left hollow tubes when the flow receded.\n` +
+`This pit is where the ceiling collapsed.\n` +
+`\n` +
+`HABITAT MODULE\n` +
+`\n` +
+`A sealed habitat sits at the base.\n` +
+`The rock walls shield against radiation\n` +
+`and hold temperature near 17°C —\n` +
+`stable enough for humans to live here.\n` +
+`\n` +
+`──────────────────────────\n` +
+`Sky: spacespheremaps.com/hdr-spheremaps\n` +
+`Moon surface: svs.gsfc.nasa.gov/4720\n`;
+
+let infoPanelOpen = false;
+let typed = false;
+
+document.getElementById('info-btn').addEventListener('click', () => {
+  infoPanelOpen = !infoPanelOpen;
+  const panel = document.getElementById('info-panel');
+  panel.style.display = infoPanelOpen ? 'flex' : 'none';
+  if (infoPanelOpen && !typed) {
+    typed = true;
+    document.getElementById('info-img-block').style.display = 'block';
+    typeInfo();
+  }
+});
+
+function closeInfo() {
+  infoPanelOpen = false;
+  document.getElementById('info-panel').style.display = 'none';
+}
+
+function typeInfo() {
+  const el = document.getElementById('info-type');
+  el.textContent = '';
+  let i = 0;
+  const iv = setInterval(() => {
+    if (i < INFO_TEXT.length) {
+      el.textContent += INFO_TEXT[i++];
+    } else {
+      clearInterval(iv);
+    }
+  }, 18);
+}
+
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'Escape' && infoPanelOpen) closeInfo();
+});
+</script>
 
 <script type="importmap">
 {
@@ -72,6 +219,7 @@ import * as THREE from 'three';
 import { VRButton }                  from 'three/addons/webxr/VRButton.js';
 import { XRControllerModelFactory }  from 'three/addons/webxr/XRControllerModelFactory.js';
 import { VRMLLoader }                from 'three/addons/loaders/VRMLLoader.js';
+import { RGBELoader }                from 'three/addons/loaders/RGBELoader.js';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Renderer
@@ -111,7 +259,9 @@ const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerH
 const player = new THREE.Group();
 player.position.set(20, -65, 0);
 scene.add(player);
-player.add(camera);
+const pitchGroup = new THREE.Group();
+player.add(pitchGroup);
+pitchGroup.add(camera);
 
 // ────────────────────────────────────────────────────────────────────────────
 // Lighting
@@ -159,6 +309,51 @@ wallLights.forEach(({ pos, color }) => {
   const l = new THREE.PointLight(color, 2.5, 120);
   l.position.set(...pos);
   scene.add(l);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// HDR sky dome — dynamic phi: 72° above regolith, 35° below. Credit: Space Spheremaps
+// ────────────────────────────────────────────────────────────────────────────
+let skyMesh = null;
+let skyMat  = null;
+let skyAbove = true; // track current state to avoid unnecessary rebuilds
+
+function buildSkyGeo(angleDeg) {
+  return new THREE.SphereGeometry(
+    1800, 64, 32,
+    0, Math.PI * 2,
+    0, angleDeg * Math.PI / 180
+  );
+}
+
+new RGBELoader().load('./sky.hdr', (tex) => {
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  skyMat = new THREE.MeshBasicMaterial({
+    map: tex, side: THREE.BackSide, depthWrite: false, fog: false,
+  });
+  skyMesh = new THREE.Mesh(buildSkyGeo(90), skyMat);
+  skyMesh.renderOrder = -2;
+  scene.add(skyMesh);
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Lunar regolith surface — ring (annulus) at y=0 with pit hole cut out
+// Inner radius matches pit opening (~50m), outer radius extends to horizon
+// ────────────────────────────────────────────────────────────────────────────
+new THREE.TextureLoader().load('./surface.jpg', (tex) => {
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(6, 6);
+  const geo = new THREE.RingGeometry(50, 1800, 128, 1);
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex, side: THREE.FrontSide, depthWrite: true, fog: false,
+  });
+  const surface = new THREE.Mesh(geo, mat);
+  surface.rotation.x = -Math.PI / 2;
+  surface.position.y = 0.1;  // raised 10cm to prevent z-fighting
+  surface.renderOrder = -1;
+  scene.add(surface);
 });
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -258,6 +453,72 @@ function addController(index) {
 
 addController(0);
 addController(1);
+
+// ────────────────────────────────────────────────────────────────────────────
+// Floating VR "?" info button — sits 1m above the habitat top (y = -70)
+// Clickable by Quest 3 ray controllers via raycasting
+// ────────────────────────────────────────────────────────────────────────────
+
+// Draw a "?" onto a canvas texture
+const btnCanvas = document.createElement('canvas');
+btnCanvas.width = 256; btnCanvas.height = 256;
+const btnCtx = btnCanvas.getContext('2d');
+btnCtx.clearRect(0, 0, 256, 256);
+btnCtx.beginPath();
+btnCtx.arc(128, 128, 120, 0, Math.PI * 2);
+btnCtx.fillStyle = 'rgba(0,180,180,0.18)';
+btnCtx.fill();
+btnCtx.strokeStyle = 'rgba(0,210,210,0.85)';
+btnCtx.lineWidth = 8;
+btnCtx.stroke();
+btnCtx.fillStyle = '#00c8c8';
+btnCtx.font = 'bold 140px monospace';
+btnCtx.textAlign = 'center';
+btnCtx.textBaseline = 'middle';
+btnCtx.fillText('?', 128, 128);
+btnCtx.font = '28px monospace';
+btnCtx.fillStyle = 'rgba(0,200,200,0.7)';
+btnCtx.fillText('[ trigger ]', 128, 222);
+
+const btnTex = new THREE.CanvasTexture(btnCanvas);
+const vrBtn = new THREE.Mesh(
+  new THREE.PlaneGeometry(3, 3),
+  new THREE.MeshBasicMaterial({ map: btnTex, transparent: true, side: THREE.DoubleSide, depthWrite: false })
+);
+vrBtn.position.set(0, -69, 0); // 1m above habitat top at y=-70
+scene.add(vrBtn);
+
+// Raycaster for VR controller interaction
+const vrRaycaster = new THREE.Raycaster();
+const _ctrlPos = new THREE.Vector3();
+const _ctrlDir = new THREE.Vector3();
+let   vrBtnCooldown = 0;
+
+// ────────────────────────────────────────────────────────────────────────────
+// VR controller select event (trigger press) — most reliable way on Quest 3
+// ────────────────────────────────────────────────────────────────────────────
+const controllers = [
+  renderer.xr.getController(0),
+  renderer.xr.getController(1),
+];
+
+function onControllerSelect(ctrlIndex) {
+  return function() {
+    if (vrBtnCooldown > 0) return;
+    const ray = controllers[ctrlIndex];
+    ray.getWorldPosition(_ctrlPos);
+    ray.getWorldDirection(_ctrlDir);
+    vrRaycaster.set(_ctrlPos, _ctrlDir);
+    const hits = vrRaycaster.intersectObject(vrBtn);
+    if (hits.length > 0) {
+      vrBtnCooldown = 0.8;
+      document.getElementById('info-btn').click();
+    }
+  };
+}
+
+controllers[0].addEventListener('select', onControllerSelect(0));
+controllers[1].addEventListener('select', onControllerSelect(1));
 
 // ────────────────────────────────────────────────────────────────────────────
 // Boundary — HabitatAtm in world metres (post -π/2 X-rotation frame)
@@ -386,25 +647,85 @@ renderer.setAnimationLoop(() => {
     boundaryHit = false;
   }
 
+  // Sky visibility — only show above regolith (y > 0), hide inside pit
+  if (skyMesh) {
+    const isAbove = player.position.y > 0;
+    skyMesh.visible = isAbove;
+    if (isAbove !== skyAbove) {
+      skyAbove = isAbove;
+      skyMesh.geometry.dispose();
+      skyMesh.geometry = buildSkyGeo(isAbove ? 90 : 35);
+    }
+  }
+
+  // Billboard VR button to always face camera
+  vrBtn.quaternion.copy(camera.quaternion);
+
+  // VR controller ray hover detection for visual feedback
+  if (vrBtnCooldown > 0) vrBtnCooldown -= dt;
+  let vrBtnHovered = false;
+  const xrSession = renderer.xr.getSession();
+  if (xrSession) {
+    for (let i = 0; i < controllers.length; i++) {
+      const ray = controllers[i];
+      ray.getWorldPosition(_ctrlPos);
+      ray.getWorldDirection(_ctrlDir);
+      vrRaycaster.set(_ctrlPos, _ctrlDir);
+      const hits = vrRaycaster.intersectObject(vrBtn);
+      if (hits.length > 0) vrBtnHovered = true;
+    }
+  }
+
+  // Hover effect — scale up and brighten when ray is pointing at button
+  const targetScale = vrBtnHovered ? 1.25 : 1.0;
+  vrBtn.scale.lerp(new THREE.Vector3(targetScale, targetScale, targetScale), 0.15);
+  vrBtn.material.opacity = vrBtnHovered ? 1.0 : 0.85;
+
   renderer.render(scene, camera);
 });
 
 // ────────────────────────────────────────────────────────────────────────────
-// Desktop keyboard fallback (WASD / QE / arrows) for testing without Quest 3
+// Desktop controls — keyboard (WASD/QE/ZX/RF) + mouse drag (yaw + pitch)
 // ────────────────────────────────────────────────────────────────────────────
 const keys = {};
 window.addEventListener('keydown', (e) => { keys[e.code] = true; });
 window.addEventListener('keyup',   (e) => { keys[e.code] = false; });
 
-// Inject keyboard movement before main loop renders; piggy-back on animationLoop
-// by wrapping it. Use a second RAF for desktop fallback.
+let pitchAngle = 0;
+const PITCH_MAX = Math.PI / 2.2;
+let mouseDown = false;
+let lastPX = 0, lastPY = 0;
+
+// Attach to window, only activate when clicking the canvas
+window.addEventListener('pointerdown', (e) => {
+  if (e.target.tagName !== 'CANVAS') return;
+  mouseDown = true;
+  lastPX = e.clientX;
+  lastPY = e.clientY;
+  document.body.style.cursor = 'grabbing';
+});
+window.addEventListener('pointerup',     () => { mouseDown = false; document.body.style.cursor = 'grab'; });
+window.addEventListener('pointercancel', () => { mouseDown = false; document.body.style.cursor = 'grab'; });
+window.addEventListener('pointermove', (e) => {
+  if (!mouseDown || renderer.xr.isPresenting) return;
+  const dx = e.clientX - lastPX;
+  const dy = e.clientY - lastPY;
+  lastPX = e.clientX;
+  lastPY = e.clientY;
+  player.rotateY(-dx * 0.005);
+  pitchAngle = Math.max(-PITCH_MAX, Math.min(PITCH_MAX, pitchAngle - dy * 0.005));
+  pitchGroup.rotation.x = pitchAngle;
+});
+document.body.style.cursor = 'grab';
+
 (function desktopFallbackLoop() {
   requestAnimationFrame(desktopFallbackLoop);
-  if (renderer.xr.isPresenting) return; // XR takes over
+  if (renderer.xr.isPresenting) return;
 
   const dt2 = 0.016;
   const SPD  = 8;
   const TSPD = 0.8;
+  const LSPD = 0.02;
 
   camera.getWorldDirection(_headFwd);
   _headRight.crossVectors(_headFwd, _worldUp).normalize();
@@ -418,6 +739,8 @@ window.addEventListener('keyup',   (e) => { keys[e.code] = false; });
   if (keys['KeyQ']) move.y -=  SPD * dt2;
   if (keys['KeyZ']) player.rotateY( TSPD * dt2);
   if (keys['KeyX']) player.rotateY(-TSPD * dt2);
+  if (keys['KeyR']) { pitchAngle = Math.max(-PITCH_MAX, pitchAngle - LSPD); pitchGroup.rotation.x = pitchAngle; }
+  if (keys['KeyF']) { pitchAngle = Math.min( PITCH_MAX, pitchAngle + LSPD); pitchGroup.rotation.x = pitchAngle; }
 
   const prop = player.position.clone().add(move);
   if (inHabitatAtm(prop.x, prop.y, prop.z) || prop.y >= -4) {
