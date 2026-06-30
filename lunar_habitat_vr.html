@@ -357,7 +357,106 @@ new THREE.TextureLoader().load('./surface.jpg', (tex) => {
 });
 
 // ────────────────────────────────────────────────────────────────────────────
-// Load g4_01.wrl
+// Cosmic ray tracks — animated particle trails from g4_1000CRevts.wrl
+// Binary format: u32 numTracks; per track: u16 numPoints, f32x3 color, then
+// numPoints * f32x3 points (already scaled mm→m, in ORIGINAL Geant4 axes)
+// World transform matches the WRL loader: orig (x,y,z) → world (x, z, -y)
+// ────────────────────────────────────────────────────────────────────────────
+let cosmicGroup = null;
+let cosmicTracks = []; // { line, totalLen, startT, duration, maxIdx }
+
+fetch('./cosmic_tracks.bin')
+  .then(r => r.arrayBuffer())
+  .then(buf => {
+    const dv = new DataView(buf);
+    let offset = 0;
+    const numTracks = dv.getUint32(offset, true); offset += 4;
+
+    cosmicGroup = new THREE.Group();
+    scene.add(cosmicGroup);
+
+    const now = performance.now() / 1000;
+
+    for (let i = 0; i < numTracks; i++) {
+      const numPoints = dv.getUint16(offset, true); offset += 2;
+      const r = dv.getFloat32(offset, true); offset += 4;
+      const g = dv.getFloat32(offset, true); offset += 4;
+      const b = dv.getFloat32(offset, true); offset += 4;
+
+      const positions = new Float32Array(numPoints * 3);
+      for (let p = 0; p < numPoints; p++) {
+        const ox = dv.getFloat32(offset, true); offset += 4;
+        const oy = dv.getFloat32(offset, true); offset += 4;
+        const oz = dv.getFloat32(offset, true); offset += 4;
+        // Apply same axis transform as the main WRL object: (x,y,z) -> (x, z, -y)
+        positions[p * 3 + 0] = ox;
+        positions[p * 3 + 1] = oz;
+        positions[p * 3 + 2] = -oy;
+      }
+
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+      // Start with draw range 0 so nothing shows until animated in
+      geo.setDrawRange(0, 0);
+
+      // Boost brightness — raw Geant4 colors are often muted
+      const col = new THREE.Color(r, g, b);
+      col.multiplyScalar(1.6);
+      col.r = Math.min(1, col.r); col.g = Math.min(1, col.g); col.b = Math.min(1, col.b);
+
+      const mat = new THREE.LineBasicMaterial({
+        color: col,
+        transparent: true,
+        opacity: 0.9,
+        depthWrite: false,
+        fog: false,
+      });
+
+      const line = new THREE.Line(geo, mat);
+      cosmicGroup.add(line);
+
+      // Stagger start times across a 6-second loop window, random per track
+      const duration = 0.35 + Math.random() * 0.5; // streak draw-in time (s)
+      const startT = now + Math.random() * 6.0;     // staggered entry
+      const holdT  = 1.0 + Math.random() * 1.5;      // how long it stays visible
+      const fadeT  = 0.6 + Math.random() * 0.6;      // fade-out duration
+
+      cosmicTracks.push({ line, geo, numPoints, startT, duration, holdT, fadeT, mat, baseOpacity: 0.9 });
+    }
+  })
+  .catch(err => console.warn('Cosmic ray tracks not loaded:', err));
+
+function updateCosmicRays(elapsed) {
+  if (!cosmicTracks.length) return;
+  const LOOP = 8.0; // total cycle length per track before it can restart conceptually
+  for (const t of cosmicTracks) {
+    let local = (elapsed - t.startT) % 9999; // simple forward time, tracks just play once then sit faded
+    if (local < 0) { t.geo.setDrawRange(0, 0); continue; }
+
+    const drawPhase  = t.duration;
+    const holdPhase  = t.duration + t.holdT;
+    const fadePhase  = t.duration + t.holdT + t.fadeT;
+
+    if (local < drawPhase) {
+      // Streak drawing in
+      const frac = local / drawPhase;
+      const count = Math.max(2, Math.floor(frac * t.numPoints));
+      t.geo.setDrawRange(0, count);
+      t.mat.opacity = t.baseOpacity;
+    } else if (local < holdPhase) {
+      t.geo.setDrawRange(0, t.numPoints);
+      t.mat.opacity = t.baseOpacity;
+    } else if (local < fadePhase) {
+      t.geo.setDrawRange(0, t.numPoints);
+      const f = (local - holdPhase) / t.fadeT;
+      t.mat.opacity = t.baseOpacity * (1 - f);
+    } else {
+      // Done — reset for a later re-trigger after a random delay, looping the show
+      t.geo.setDrawRange(0, 0);
+      t.startT = elapsed + Math.random() * LOOP;
+    }
+  }
+}
 // ────────────────────────────────────────────────────────────────────────────
 const SCALE = 0.001;   // mm → m
 
@@ -567,9 +666,12 @@ const warnEl        = document.getElementById('boundary-warn');
 // Animation loop
 // ────────────────────────────────────────────────────────────────────────────
 const clock = new THREE.Clock();
+let cosmicElapsed = 0;
 
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05); // cap at 50 ms
+  cosmicElapsed += dt;
+  updateCosmicRays(cosmicElapsed);
 
   _delta.set(0, 0, 0);
   let turnDelta = 0;
