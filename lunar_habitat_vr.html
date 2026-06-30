@@ -331,7 +331,7 @@ new RGBELoader().load('./sky.hdr', (tex) => {
   skyMat = new THREE.MeshBasicMaterial({
     map: tex, side: THREE.BackSide, depthWrite: false, fog: false,
   });
-  skyMesh = new THREE.Mesh(buildSkyGeo(90), skyMat);
+  skyMesh = new THREE.Mesh(buildSkyGeo(180), skyMat);
   skyMesh.renderOrder = -2;
   scene.add(skyMesh);
 });
@@ -647,14 +647,14 @@ renderer.setAnimationLoop(() => {
     boundaryHit = false;
   }
 
-  // Sky visibility — only show above regolith (y > 0), hide inside pit
+  // Sky visibility — only show above bottom of regolith / top of skylight (y > -5, matches WRL geometry)
   if (skyMesh) {
-    const isAbove = player.position.y > 0;
+    const isAbove = player.position.y > -5;
     skyMesh.visible = isAbove;
     if (isAbove !== skyAbove) {
       skyAbove = isAbove;
       skyMesh.geometry.dispose();
-      skyMesh.geometry = buildSkyGeo(isAbove ? 90 : 35);
+      skyMesh.geometry = buildSkyGeo(isAbove ? 180 : 35);
     }
   }
 
