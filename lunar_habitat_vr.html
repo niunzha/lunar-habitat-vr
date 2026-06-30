@@ -375,7 +375,8 @@ fetch('./cosmic_tracks.bin')
     cosmicGroup = new THREE.Group();
     scene.add(cosmicGroup);
 
-    const now = performance.now() / 1000;
+    // Use the same clock basis as updateCosmicRays (cosmicElapsed, starts at 0)
+    const now = cosmicElapsed;
 
     for (let i = 0; i < numTracks; i++) {
       const numPoints = dv.getUint16(offset, true); offset += 2;
@@ -410,6 +411,8 @@ fetch('./cosmic_tracks.bin')
         opacity: 0.9,
         depthWrite: false,
         fog: false,
+        blending: THREE.AdditiveBlending,
+        toneMapped: false,
       });
 
       const line = new THREE.Line(geo, mat);
@@ -423,6 +426,7 @@ fetch('./cosmic_tracks.bin')
 
       cosmicTracks.push({ line, geo, numPoints, startT, duration, holdT, fadeT, mat, baseOpacity: 0.9 });
     }
+    console.log(`Cosmic ray tracks loaded: ${cosmicTracks.length}`);
   })
   .catch(err => console.warn('Cosmic ray tracks not loaded:', err));
 
