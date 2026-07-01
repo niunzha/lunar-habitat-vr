@@ -467,106 +467,153 @@ new THREE.TextureLoader().load('./surface.jpg', (tex) => {
 // Binary format: u32 numTracks; per track: u16 numPoints, f32x3 color, then
 // numPoints * f32x3 points (already scaled mm→m, in ORIGINAL Geant4 axes)
 // World transform matches the WRL loader: orig (x,y,z) → world (x, z, -y)
+//
+// All ~22.6k tracks are merged into a single LineSegments draw call, with a
+// custom shader doing the draw-in/hold/fade-out/loop animation per vertex
+// (driven only by a uTime uniform). Previously each track was its own
+// THREE.Line updated from a per-frame JS loop — 22.6k draw calls plus a
+// 22.6k-iteration JS loop every frame was the main cause of VR lag.
 // ────────────────────────────────────────────────────────────────────────────
-let cosmicGroup = null;
-let cosmicTracks = []; // { line, totalLen, startT, duration, maxIdx }
+let cosmicMaterial = null;
 
 fetch('./cosmic_tracks.bin')
   .then(r => r.arrayBuffer())
   .then(buf => {
     const dv = new DataView(buf);
-    let offset = 0;
-    const numTracks = dv.getUint32(offset, true); offset += 4;
+    let offset = 4; // skip u32 numTracks
+    const numTracks = dv.getUint32(0, true);
 
-    cosmicGroup = new THREE.Group();
-    scene.add(cosmicGroup);
-
-    // Use the same clock basis as updateCosmicRays (cosmicElapsed, starts at 0)
-    const now = cosmicElapsed;
-
+    // First pass: record each track's byte offsets and tally total segments
+    // (a track with N points draws as N-1 two-vertex segments).
+    const trackMeta = [];
+    let totalSegments = 0;
     for (let i = 0; i < numTracks; i++) {
       const numPoints = dv.getUint16(offset, true); offset += 2;
-      const r = dv.getFloat32(offset, true); offset += 4;
-      const g = dv.getFloat32(offset, true); offset += 4;
-      const b = dv.getFloat32(offset, true); offset += 4;
+      const colorOffset = offset; offset += 12;
+      const pointsOffset = offset; offset += numPoints * 12;
+      trackMeta.push({ numPoints, colorOffset, pointsOffset });
+      if (numPoints >= 2) totalSegments += numPoints - 1;
+    }
 
-      const positions = new Float32Array(numPoints * 3);
-      for (let p = 0; p < numPoints; p++) {
-        const ox = dv.getFloat32(offset, true); offset += 4;
-        const oy = dv.getFloat32(offset, true); offset += 4;
-        const oz = dv.getFloat32(offset, true); offset += 4;
-        // Apply same axis transform as the main WRL object: (x,y,z) -> (x, z, -y)
-        positions[p * 3 + 0] = ox;
-        positions[p * 3 + 1] = oz;
-        positions[p * 3 + 2] = -oy;
-      }
+    const totalVerts = totalSegments * 2;
+    const positions = new Float32Array(totalVerts * 3);
+    const colors    = new Float32Array(totalVerts * 3);
+    const segFrac   = new Float32Array(totalVerts);
+    const timing    = new Float32Array(totalVerts * 4); // start, duration, hold, fade
+    const cycleArr  = new Float32Array(totalVerts);
 
-      const geo = new THREE.BufferGeometry();
-      geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-      // Start with draw range 0 so nothing shows until animated in
-      geo.setDrawRange(0, 0);
+    const LOOP = 8.0; // extra random gap (s) added to each track's loop cycle
+    let v = 0;
+    for (const { numPoints, colorOffset, pointsOffset } of trackMeta) {
+      if (numPoints < 2) continue;
 
+      const r = dv.getFloat32(colorOffset,     true);
+      const g = dv.getFloat32(colorOffset + 4, true);
+      const b = dv.getFloat32(colorOffset + 8, true);
       // Boost brightness — raw Geant4 colors are often muted
-      const col = new THREE.Color(r, g, b);
-      col.multiplyScalar(1.6);
+      const col = new THREE.Color(r, g, b).multiplyScalar(1.6);
       col.r = Math.min(1, col.r); col.g = Math.min(1, col.g); col.b = Math.min(1, col.b);
 
-      const mat = new THREE.LineBasicMaterial({
-        color: col,
-        transparent: true,
-        opacity: 0.9,
-        depthWrite: false,
-        fog: false,
-        blending: THREE.AdditiveBlending,
-        toneMapped: false,
-      });
-
-      const line = new THREE.Line(geo, mat);
-      cosmicGroup.add(line);
-
-      // Stagger start times across a 6-second loop window, random per track
+      // Stagger start times + loop cycle, random per track (same feel as before)
       const duration = 0.35 + Math.random() * 0.5; // streak draw-in time (s)
-      const startT = now + Math.random() * 6.0;     // staggered entry
-      const holdT  = 1.0 + Math.random() * 1.5;      // how long it stays visible
-      const fadeT  = 0.6 + Math.random() * 0.6;      // fade-out duration
+      const startT   = Math.random() * 6.0;         // staggered entry
+      const holdT    = 1.0 + Math.random() * 1.5;   // how long it stays visible
+      const fadeT    = 0.6 + Math.random() * 0.6;   // fade-out duration
+      const gapT     = Math.random() * LOOP;        // pause before the track loops again
+      const cycle    = duration + holdT + fadeT + gapT;
 
-      cosmicTracks.push({ line, geo, numPoints, startT, duration, holdT, fadeT, mat, baseOpacity: 0.9 });
+      const segCount = numPoints - 1;
+      for (let s = 0; s < segCount; s++) {
+        const frac = s / segCount;
+        for (let e = 0; e < 2; e++) {
+          const p = s + e;
+          const base = pointsOffset + p * 12;
+          const ox = dv.getFloat32(base,     true);
+          const oy = dv.getFloat32(base + 4, true);
+          const oz = dv.getFloat32(base + 8, true);
+          // Apply same axis transform as the main WRL object: (x,y,z) -> (x, z, -y)
+          positions[v * 3 + 0] = ox;
+          positions[v * 3 + 1] = oz;
+          positions[v * 3 + 2] = -oy;
+
+          colors[v * 3 + 0] = col.r; colors[v * 3 + 1] = col.g; colors[v * 3 + 2] = col.b;
+          segFrac[v] = frac;
+          timing[v * 4 + 0] = startT;
+          timing[v * 4 + 1] = duration;
+          timing[v * 4 + 2] = holdT;
+          timing[v * 4 + 3] = fadeT;
+          cycleArr[v] = cycle;
+          v++;
+        }
+      }
     }
-    console.log(`Cosmic ray tracks loaded: ${cosmicTracks.length}`);
+
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('aColor',   new THREE.BufferAttribute(colors, 3));
+    geo.setAttribute('aSeg',     new THREE.BufferAttribute(segFrac, 1));
+    geo.setAttribute('aTiming',  new THREE.BufferAttribute(timing, 4));
+    geo.setAttribute('aCycle',   new THREE.BufferAttribute(cycleArr, 1));
+
+    cosmicMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: { value: cosmicElapsed },
+        uBaseOpacity: { value: 0.9 },
+      },
+      vertexShader: `
+        attribute vec3 aColor;
+        attribute float aSeg;
+        attribute vec4 aTiming; // start, duration, hold, fade
+        attribute float aCycle;
+        uniform float uTime;
+        uniform float uBaseOpacity;
+        varying vec3 vColor;
+        varying float vAlpha;
+        void main() {
+          float startT   = aTiming.x;
+          float duration = aTiming.y;
+          float holdT    = aTiming.z;
+          float fadeT    = aTiming.w;
+          float local = mod(uTime - startT, aCycle);
+
+          float reveal, alpha;
+          if (local < duration) {
+            reveal = local / duration;
+            alpha = uBaseOpacity;
+          } else if (local < duration + holdT) {
+            reveal = 1.0;
+            alpha = uBaseOpacity;
+          } else if (local < duration + holdT + fadeT) {
+            reveal = 1.0;
+            alpha = uBaseOpacity * (1.0 - (local - duration - holdT) / fadeT);
+          } else {
+            reveal = 0.0;
+            alpha = 0.0;
+          }
+
+          vColor = aColor;
+          vAlpha = (aSeg <= reveal) ? alpha : 0.0;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        varying vec3 vColor;
+        varying float vAlpha;
+        void main() {
+          if (vAlpha <= 0.001) discard;
+          gl_FragColor = vec4(vColor, vAlpha);
+        }
+      `,
+      transparent: true,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      fog: false,
+    });
+
+    scene.add(new THREE.LineSegments(geo, cosmicMaterial));
+    console.log(`Cosmic ray tracks loaded: ${trackMeta.length} tracks, ${totalVerts} vertices, 1 draw call`);
   })
   .catch(err => console.warn('Cosmic ray tracks not loaded:', err));
-
-function updateCosmicRays(elapsed) {
-  if (!cosmicTracks.length) return;
-  const LOOP = 8.0; // total cycle length per track before it can restart conceptually
-  for (const t of cosmicTracks) {
-    let local = (elapsed - t.startT) % 9999; // simple forward time, tracks just play once then sit faded
-    if (local < 0) { t.geo.setDrawRange(0, 0); continue; }
-
-    const drawPhase  = t.duration;
-    const holdPhase  = t.duration + t.holdT;
-    const fadePhase  = t.duration + t.holdT + t.fadeT;
-
-    if (local < drawPhase) {
-      // Streak drawing in
-      const frac = local / drawPhase;
-      const count = Math.max(2, Math.floor(frac * t.numPoints));
-      t.geo.setDrawRange(0, count);
-      t.mat.opacity = t.baseOpacity;
-    } else if (local < holdPhase) {
-      t.geo.setDrawRange(0, t.numPoints);
-      t.mat.opacity = t.baseOpacity;
-    } else if (local < fadePhase) {
-      t.geo.setDrawRange(0, t.numPoints);
-      const f = (local - holdPhase) / t.fadeT;
-      t.mat.opacity = t.baseOpacity * (1 - f);
-    } else {
-      // Done — reset for a later re-trigger after a random delay, looping the show
-      t.geo.setDrawRange(0, 0);
-      t.startT = elapsed + Math.random() * LOOP;
-    }
-  }
-}
 // ────────────────────────────────────────────────────────────────────────────
 const SCALE = 0.001;   // mm → m
 
@@ -711,23 +758,31 @@ const controllers = [
   renderer.xr.getController(1),
 ];
 
+function tryClickVrBtn(ctrlIndex) {
+  if (vrBtnCooldown > 0) return;
+  const ray = controllers[ctrlIndex];
+  ray.getWorldPosition(_ctrlPos);
+  ray.getWorldDirection(_ctrlDir);
+  vrRaycaster.set(_ctrlPos, _ctrlDir);
+  const hits = vrRaycaster.intersectObject(vrBtn);
+  if (hits.length > 0) {
+    vrBtnCooldown = 0.8;
+    document.getElementById('info-btn').click();
+  }
+}
+
 function onControllerSelect(ctrlIndex) {
-  return function() {
-    if (vrBtnCooldown > 0) return;
-    const ray = controllers[ctrlIndex];
-    ray.getWorldPosition(_ctrlPos);
-    ray.getWorldDirection(_ctrlDir);
-    vrRaycaster.set(_ctrlPos, _ctrlDir);
-    const hits = vrRaycaster.intersectObject(vrBtn);
-    if (hits.length > 0) {
-      vrBtnCooldown = 0.8;
-      document.getElementById('info-btn').click();
-    }
-  };
+  return function() { tryClickVrBtn(ctrlIndex); };
 }
 
 controllers[0].addEventListener('select', onControllerSelect(0));
 controllers[1].addEventListener('select', onControllerSelect(1));
+
+// Direct gamepad trigger polling (in addition to the 'select' event above) —
+// on some browsers 'select' fires unreliably once dom-overlay is active, so
+// the render loop also watches the trigger button (index 0, xr-standard
+// mapping) directly and fires on the press edge.
+const triggerWasPressed = [false, false];
 
 // ────────────────────────────────────────────────────────────────────────────
 // Boundary — HabitatAtm in world metres (post -π/2 X-rotation frame)
@@ -781,14 +836,15 @@ let cosmicElapsed = 0;
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05); // cap at 50 ms
   cosmicElapsed += dt;
-  updateCosmicRays(cosmicElapsed);
+  if (cosmicMaterial) cosmicMaterial.uniforms.uTime.value = cosmicElapsed;
 
   _delta.set(0, 0, 0);
   let turnDelta = 0;
 
   const session = renderer.xr.getSession();
   if (session) {
-    for (const src of session.inputSources) {
+    for (let i = 0; i < session.inputSources.length; i++) {
+      const src = session.inputSources[i];
       if (!src.gamepad) continue;
       const ax = src.gamepad.axes;
 
@@ -819,6 +875,13 @@ renderer.setAnimationLoop(() => {
         // Up/down in world Y with right stick Y (sy positive = push forward = go up)
         _delta.y -= sy * FLYSPEED * dt;
       }
+
+      // Front trigger (index 0 in the xr-standard gamepad mapping) — click
+      // the floating "?" button when it's pressed while the ray is on it.
+      const triggerBtn = src.gamepad.buttons[0];
+      const triggerPressed = !!triggerBtn && (triggerBtn.pressed || triggerBtn.value > 0.7);
+      if (triggerPressed && !triggerWasPressed[i]) tryClickVrBtn(i);
+      triggerWasPressed[i] = triggerPressed;
     }
   }
 
