@@ -721,6 +721,36 @@ addController(0);
 addController(1);
 
 // ────────────────────────────────────────────────────────────────────────────
+// TEMPORARY debug HUD — attached to the camera so it's always in view in the
+// headset (a real 3D object, not a DOM overlay, so it works regardless of
+// dom-overlay support). Shows live numbers for the controller-ray raycast
+// against the "?" button so we can see exactly why it isn't registering,
+// instead of guessing. Remove once the button interaction is confirmed working.
+// ────────────────────────────────────────────────────────────────────────────
+const debugCanvas = document.createElement('canvas');
+debugCanvas.width = 512; debugCanvas.height = 256;
+const debugCtx = debugCanvas.getContext('2d');
+const debugTex = new THREE.CanvasTexture(debugCanvas);
+const debugPanel = new THREE.Mesh(
+  new THREE.PlaneGeometry(0.5, 0.25),
+  new THREE.MeshBasicMaterial({ map: debugTex, transparent: true, depthTest: false, depthWrite: false })
+);
+debugPanel.position.set(0, -0.15, -0.5); // low in view, close to face
+debugPanel.renderOrder = 999;
+camera.add(debugPanel); // camera is already in the scene graph (player > pitchGroup > camera)
+
+function drawDebugPanel(lines) {
+  debugCtx.clearRect(0, 0, 512, 256);
+  debugCtx.fillStyle = 'rgba(0,0,0,0.55)';
+  debugCtx.fillRect(0, 0, 512, 256);
+  debugCtx.fillStyle = '#7dffb0';
+  debugCtx.font = '20px monospace';
+  lines.forEach((line, i) => debugCtx.fillText(line, 10, 26 + i * 26));
+  debugTex.needsUpdate = true;
+}
+let debugFrameCount = 0;
+
+// ────────────────────────────────────────────────────────────────────────────
 // Floating VR "?" info button — an interactive glowing orb 1m above the
 // habitat top (y = -70). Ray-clickable from either controller's front trigger.
 // The sphere is the raycast target; a glow shell + spinning halo ring signal
@@ -796,6 +826,9 @@ vrBtnGroup.add(vrBtnLabel);
 const vrRaycaster = new THREE.Raycaster();
 const _ctrlPos = new THREE.Vector3();
 const _ctrlDir = new THREE.Vector3();
+const _btnWorldPos = new THREE.Vector3();
+const _toBtn = new THREE.Vector3();
+const _closestPt = new THREE.Vector3();
 let   vrBtnCooldown = 0;
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -997,7 +1030,10 @@ renderer.setAnimationLoop(() => {
   if (vrBtnCooldown > 0) vrBtnCooldown -= dt;
   let vrBtnHovered = false;
   const xrSession = renderer.xr.getSession();
+  const debugLines = [`XR session: ${xrSession ? 'yes' : 'NO'}  ctrls: ${controllers.length}`];
   if (xrSession) {
+    vrBtnHitSphere.getWorldPosition(_btnWorldPos);
+    debugLines.push(`btn world pos: ${_btnWorldPos.x.toFixed(1)},${_btnWorldPos.y.toFixed(1)},${_btnWorldPos.z.toFixed(1)}`);
     for (let i = 0; i < controllers.length; i++) {
       const ray = controllers[i];
       ray.getWorldPosition(_ctrlPos);
@@ -1010,8 +1046,25 @@ renderer.setAnimationLoop(() => {
         rayLines[i].material.color.set(hit ? 0x00ff88 : 0x88ccff);
         rayLines[i].material.opacity = hit ? 1.0 : 0.6;
       }
+
+      // Diagnostics: straight-line distance controller->button, and the
+      // closest-approach distance from the infinite ray line to the button
+      // center (small closest-approach + hit:false would mean the raycast
+      // itself is broken; a huge distance would mean a position/units bug).
+      _toBtn.copy(_btnWorldPos).sub(_ctrlPos);
+      const t = _toBtn.dot(_ctrlDir);
+      _closestPt.copy(_ctrlPos).addScaledVector(_ctrlDir, t);
+      const closestDist = _btnWorldPos.distanceTo(_closestPt);
+      debugLines.push(
+        `C${i} pos ${_ctrlPos.x.toFixed(1)},${_ctrlPos.y.toFixed(1)},${_ctrlPos.z.toFixed(1)} vis=${ray.visible}`,
+        `C${i} dist=${_toBtn.length().toFixed(1)}m closest=${closestDist.toFixed(2)}m hit=${hit}`
+      );
     }
+  } else {
+    debugLines.push('no session in animation loop — is XR actually presenting?');
   }
+  debugFrameCount++;
+  if (debugFrameCount % 10 === 0) drawDebugPanel(debugLines);
 
   // Idle "breathing" pulse (always on) plus a hover boost, so the orb reads
   // as clickable whether or not a controller ray is currently on it
