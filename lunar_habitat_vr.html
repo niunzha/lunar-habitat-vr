@@ -59,7 +59,7 @@
 
     /* ── Info panel ── */
     #info-panel {
-      display: none; position: fixed; inset: 0;
+      display: none; pointer-events: none; position: fixed; inset: 0;
       background: rgba(0,0,0,0.6); z-index: 160;
       font-family: monospace; align-items: center; justify-content: center;
     }
@@ -192,6 +192,7 @@ document.getElementById('info-btn').addEventListener('click', () => {
   infoPanelOpen = !infoPanelOpen;
   const panel = document.getElementById('info-panel');
   panel.style.display = infoPanelOpen ? 'flex' : 'none';
+  panel.style.pointerEvents = infoPanelOpen ? 'auto' : 'none';
   if (infoPanelOpen && !typed) {
     typed = true;
     document.getElementById('info-img-block').style.display = 'block';
@@ -201,7 +202,9 @@ document.getElementById('info-btn').addEventListener('click', () => {
 
 function closeInfo() {
   infoPanelOpen = false;
-  document.getElementById('info-panel').style.display = 'none';
+  const panel = document.getElementById('info-panel');
+  panel.style.display = 'none';
+  panel.style.pointerEvents = 'none';
 }
 
 function typeInfo() {
@@ -690,17 +693,24 @@ loader.load(
 // ────────────────────────────────────────────────────────────────────────────
 const ctrlFactory = new XRControllerModelFactory();
 
+const rayLines = []; // ray line meshes, indexed like `controllers` — used to flash on hover
+
 function addController(index) {
   const ray  = renderer.xr.getController(index);
   const grip = renderer.xr.getControllerGrip(index);
   grip.add(ctrlFactory.createControllerModel(grip));
 
-  // Simple ray line for pointing
+  // Ray line for pointing — long enough to reach across the whole habitat
+  // (the button can be tens of meters away), so there's a real visual cue
+  // for aim even at a distance, not just close up.
   const geo = new THREE.BufferGeometry().setFromPoints([
     new THREE.Vector3(0, 0, 0),
-    new THREE.Vector3(0, 0, -2),
+    new THREE.Vector3(0, 0, -100),
   ]);
-  ray.add(new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0x88ccff, transparent: true, opacity: 0.6 })));
+  const rayMat = new THREE.LineBasicMaterial({ color: 0x88ccff, transparent: true, opacity: 0.6 });
+  const rayLine = new THREE.Line(geo, rayMat);
+  ray.add(rayLine);
+  rayLines[index] = rayLine;
 
   player.add(ray);
   player.add(grip);
@@ -727,6 +737,17 @@ const vrBtnSphere = new THREE.Mesh(
   new THREE.MeshBasicMaterial({ color: 0x00c8c8, transparent: true, opacity: 0.28, depthWrite: false })
 );
 vrBtnGroup.add(vrBtnSphere);
+
+// Invisible, much larger hit-target used only for raycasting (not rendered).
+// The visible orb is small on purpose, but a 0.9m hit radius is a very thin
+// target to land a hand-held ray on at any real distance — this widens the
+// forgiving "you hit it" zone well beyond the visible sphere without making
+// the orb itself look oversized.
+const vrBtnHitSphere = new THREE.Mesh(
+  new THREE.SphereGeometry(2.2, 16, 16),
+  new THREE.MeshBasicMaterial({ opacity: 0, transparent: true, depthWrite: false, depthTest: false })
+);
+vrBtnGroup.add(vrBtnHitSphere);
 
 // Outer fresnel-style glow shell (visual only, not part of the raycast target)
 const vrBtnGlow = new THREE.Mesh(
@@ -791,7 +812,7 @@ function tryClickVrBtn(ctrlIndex) {
   ray.getWorldPosition(_ctrlPos);
   ray.getWorldDirection(_ctrlDir);
   vrRaycaster.set(_ctrlPos, _ctrlDir);
-  const hits = vrRaycaster.intersectObject(vrBtnSphere);
+  const hits = vrRaycaster.intersectObject(vrBtnHitSphere);
   if (hits.length > 0) {
     vrBtnCooldown = 0.8;
     document.getElementById('info-btn').click();
@@ -960,12 +981,19 @@ renderer.setAnimationLoop(() => {
     }
   }
 
-  // Billboard VR button group to always face camera
-  vrBtnGroup.quaternion.copy(camera.quaternion);
+  // Billboard VR button group to always face camera — use the camera's WORLD
+  // quaternion, not its local one (camera.quaternion is relative to the
+  // player rig, which itself yaws as you turn; copying that straight onto
+  // vrBtnGroup, a direct child of the scene, drifted out of alignment with
+  // your actual view direction every time you turned).
+  camera.getWorldQuaternion(vrBtnGroup.quaternion);
   // Continuous slow spin on the halo ring — reads as "interactive" at a glance
   vrBtnRing.rotation.z += dt * 0.6;
 
-  // VR controller ray hover detection for visual feedback
+  // VR controller ray hover detection for visual feedback — each ray flashes
+  // brighter/green right where you're holding the controller when it's on
+  // target, which is much easier to notice than a small change on a distant
+  // button, especially at range.
   if (vrBtnCooldown > 0) vrBtnCooldown -= dt;
   let vrBtnHovered = false;
   const xrSession = renderer.xr.getSession();
@@ -975,8 +1003,13 @@ renderer.setAnimationLoop(() => {
       ray.getWorldPosition(_ctrlPos);
       ray.getWorldDirection(_ctrlDir);
       vrRaycaster.set(_ctrlPos, _ctrlDir);
-      const hits = vrRaycaster.intersectObject(vrBtnSphere);
-      if (hits.length > 0) vrBtnHovered = true;
+      const hits = vrRaycaster.intersectObject(vrBtnHitSphere);
+      const hit = hits.length > 0;
+      if (hit) vrBtnHovered = true;
+      if (rayLines[i]) {
+        rayLines[i].material.color.set(hit ? 0x00ff88 : 0x88ccff);
+        rayLines[i].material.opacity = hit ? 1.0 : 0.6;
+      }
     }
   }
 
