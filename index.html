@@ -185,6 +185,10 @@ const INFO_TEXT =
 `Sky: spacespheremaps.com/hdr-spheremaps\n` +
 `Moon surface: svs.gsfc.nasa.gov/4720\n`;
 
+// Exposed so the module script (separate scope) can reuse this text for the
+// in-VR proximity sign without duplicating it.
+window.INFO_TEXT = INFO_TEXT;
+
 let infoPanelOpen = false;
 let typed = false;
 
@@ -693,24 +697,10 @@ loader.load(
 // ────────────────────────────────────────────────────────────────────────────
 const ctrlFactory = new XRControllerModelFactory();
 
-const rayLines = []; // ray line meshes, indexed like `controllers` — used to flash on hover
-
 function addController(index) {
   const ray  = renderer.xr.getController(index);
   const grip = renderer.xr.getControllerGrip(index);
   grip.add(ctrlFactory.createControllerModel(grip));
-
-  // Ray line for pointing — long enough to reach across the whole habitat
-  // (the button can be tens of meters away), so there's a real visual cue
-  // for aim even at a distance, not just close up.
-  const geo = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(0, 0, 0),
-    new THREE.Vector3(0, 0, -100),
-  ]);
-  const rayMat = new THREE.LineBasicMaterial({ color: 0x88ccff, transparent: true, opacity: 0.6 });
-  const rayLine = new THREE.Line(geo, rayMat);
-  ray.add(rayLine);
-  rayLines[index] = rayLine;
 
   player.add(ray);
   player.add(grip);
@@ -721,117 +711,38 @@ addController(0);
 addController(1);
 
 // ────────────────────────────────────────────────────────────────────────────
-// Floating VR "?" info button — an interactive glowing orb 1m above the
-// habitat top (y = -70). Ray-clickable from either controller's front trigger.
-// The sphere is the raycast target; a glow shell + spinning halo ring signal
-// "this is interactive" even before a controller ray touches it, and both
-// brighten further on hover.
+// Proximity info sign — same content as the desktop "?" panel (including the
+// radiation color key), on a floating billboarded panel in the habitat. It
+// fades in as you fly close and fades out as you leave — no aiming or button
+// press needed, so it doesn't depend on controller raycasting at all. Placed
+// where the old interactive "?" orb used to be.
 // ────────────────────────────────────────────────────────────────────────────
-const vrBtnGroup = new THREE.Group();
-vrBtnGroup.position.set(0, -69, 0); // 1m above habitat top at y=-70
-scene.add(vrBtnGroup);
+const SIGN_SHOW_DIST = 6;  // fully visible within this distance (m)
+const SIGN_HIDE_DIST = 14; // fully invisible beyond this distance (m)
 
-// Interactive hit-target — the sphere the controller ray is tested against
-const vrBtnSphere = new THREE.Mesh(
-  new THREE.SphereGeometry(0.9, 32, 32),
-  new THREE.MeshBasicMaterial({ color: 0x00c8c8, transparent: true, opacity: 0.28, depthWrite: false })
+const signCanvas = document.createElement('canvas');
+signCanvas.width = 768; signCanvas.height = 960;
+const signCtx = signCanvas.getContext('2d');
+signCtx.fillStyle = 'rgba(0,10,12,0.82)';
+signCtx.fillRect(0, 0, signCanvas.width, signCanvas.height);
+signCtx.strokeStyle = 'rgba(0,200,200,0.5)';
+signCtx.lineWidth = 4;
+signCtx.strokeRect(10, 10, signCanvas.width - 20, signCanvas.height - 20);
+signCtx.fillStyle = '#00c8c8';
+signCtx.font = '22px monospace';
+signCtx.textBaseline = 'top';
+(window.INFO_TEXT || '').split('\n').forEach((line, i) => signCtx.fillText(line, 36, 36 + i * 28));
+
+const signTex = new THREE.CanvasTexture(signCanvas);
+const signGroup = new THREE.Group();
+signGroup.position.set(0, -69, 0); // same spot the "?" orb used to occupy
+scene.add(signGroup);
+
+const signMesh = new THREE.Mesh(
+  new THREE.PlaneGeometry(4, 5),
+  new THREE.MeshBasicMaterial({ map: signTex, transparent: true, opacity: 0, depthWrite: false })
 );
-vrBtnGroup.add(vrBtnSphere);
-
-// Invisible, much larger hit-target used only for raycasting (not rendered).
-// The visible orb is small on purpose, but a small hit radius is a very thin
-// target to land a hand-held ray on at any real distance — this widens the
-// forgiving "you hit it" zone well beyond the visible sphere without making
-// the orb itself look oversized. (Measured on-device: a miss of ~3.8m at
-// ~4.9m range with the previous 2.2m radius — bumped up with real margin.)
-const vrBtnHitSphere = new THREE.Mesh(
-  new THREE.SphereGeometry(5, 16, 16),
-  new THREE.MeshBasicMaterial({ opacity: 0, transparent: true, depthWrite: false, depthTest: false })
-);
-vrBtnGroup.add(vrBtnHitSphere);
-
-// Outer fresnel-style glow shell (visual only, not part of the raycast target)
-const vrBtnGlow = new THREE.Mesh(
-  new THREE.SphereGeometry(1.05, 32, 32),
-  new THREE.MeshBasicMaterial({
-    color: 0x00e6e6, transparent: true, opacity: 0.18, depthWrite: false,
-    side: THREE.BackSide, blending: THREE.AdditiveBlending,
-  })
-);
-vrBtnGroup.add(vrBtnGlow);
-
-// Slowly spinning halo ring — a constant "this is clickable" affordance
-const vrBtnRing = new THREE.Mesh(
-  new THREE.TorusGeometry(1.3, 0.035, 8, 64),
-  new THREE.MeshBasicMaterial({
-    color: 0x00ffff, transparent: true, opacity: 0.55, depthWrite: false,
-    blending: THREE.AdditiveBlending,
-  })
-);
-vrBtnGroup.add(vrBtnRing);
-
-// "?" label + trigger hint, drawn on a canvas texture, sits just outside the
-// sphere surface and shares the group's billboard rotation
-const btnCanvas = document.createElement('canvas');
-btnCanvas.width = 256; btnCanvas.height = 256;
-const btnCtx = btnCanvas.getContext('2d');
-btnCtx.clearRect(0, 0, 256, 256);
-btnCtx.fillStyle = '#00c8c8';
-btnCtx.font = 'bold 140px monospace';
-btnCtx.textAlign = 'center';
-btnCtx.textBaseline = 'middle';
-btnCtx.fillText('?', 128, 118);
-btnCtx.font = '26px monospace';
-btnCtx.fillStyle = 'rgba(0,220,220,0.85)';
-btnCtx.fillText('[ trigger ]', 128, 214);
-
-const btnTex = new THREE.CanvasTexture(btnCanvas);
-const vrBtnLabel = new THREE.Mesh(
-  new THREE.PlaneGeometry(1.6, 1.6),
-  new THREE.MeshBasicMaterial({ map: btnTex, transparent: true, depthWrite: false })
-);
-vrBtnLabel.position.z = 0.95; // just outside the sphere, facing the camera
-vrBtnGroup.add(vrBtnLabel);
-
-// Raycaster for VR controller interaction
-const vrRaycaster = new THREE.Raycaster();
-const _ctrlPos = new THREE.Vector3();
-const _ctrlDir = new THREE.Vector3();
-let   vrBtnCooldown = 0;
-
-// ────────────────────────────────────────────────────────────────────────────
-// VR controller select event (trigger press) — most reliable way on Quest 3
-// ────────────────────────────────────────────────────────────────────────────
-const controllers = [
-  renderer.xr.getController(0),
-  renderer.xr.getController(1),
-];
-
-function tryClickVrBtn(ctrlIndex) {
-  if (vrBtnCooldown > 0) return;
-  const ray = controllers[ctrlIndex];
-  ray.getWorldPosition(_ctrlPos);
-  ray.getWorldDirection(_ctrlDir);
-  vrRaycaster.set(_ctrlPos, _ctrlDir);
-  const hits = vrRaycaster.intersectObject(vrBtnHitSphere);
-  if (hits.length > 0) {
-    vrBtnCooldown = 0.8;
-    document.getElementById('info-btn').click();
-  }
-}
-
-function onControllerSelect(ctrlIndex) {
-  return function() { tryClickVrBtn(ctrlIndex); };
-}
-
-controllers[0].addEventListener('select', onControllerSelect(0));
-controllers[1].addEventListener('select', onControllerSelect(1));
-
-// Direct gamepad trigger polling (in addition to the 'select' event above) —
-// on some browsers 'select' fires unreliably once dom-overlay is active, so
-// the render loop also watches the trigger button (index 0, xr-standard
-// mapping) directly and fires on the press edge.
-const triggerWasPressed = [false, false];
+signGroup.add(signMesh);
 
 // ────────────────────────────────────────────────────────────────────────────
 // Boundary — HabitatAtm in world metres (post -π/2 X-rotation frame)
@@ -924,13 +835,6 @@ renderer.setAnimationLoop(() => {
         // Up/down in world Y with right stick Y (sy positive = push forward = go up)
         _delta.y -= sy * FLYSPEED * dt;
       }
-
-      // Front trigger (index 0 in the xr-standard gamepad mapping) — click
-      // the floating "?" button when it's pressed while the ray is on it.
-      const triggerBtn = src.gamepad.buttons[0];
-      const triggerPressed = !!triggerBtn && (triggerBtn.pressed || triggerBtn.value > 0.7);
-      if (triggerPressed && !triggerWasPressed[i]) tryClickVrBtn(i);
-      triggerWasPressed[i] = triggerPressed;
     }
   }
 
@@ -982,48 +886,18 @@ renderer.setAnimationLoop(() => {
     }
   }
 
-  // Billboard VR button group to always face camera — use the camera's WORLD
-  // quaternion, not its local one (camera.quaternion is relative to the
-  // player rig, which itself yaws as you turn; copying that straight onto
-  // vrBtnGroup, a direct child of the scene, drifted out of alignment with
-  // your actual view direction every time you turned).
-  camera.getWorldQuaternion(vrBtnGroup.quaternion);
-  // Continuous slow spin on the halo ring — reads as "interactive" at a glance
-  vrBtnRing.rotation.z += dt * 0.6;
-
-  // VR controller ray hover detection for visual feedback — each ray flashes
-  // brighter/green right where you're holding the controller when it's on
-  // target, which is much easier to notice than a small change on a distant
-  // button, especially at range.
-  if (vrBtnCooldown > 0) vrBtnCooldown -= dt;
-  let vrBtnHovered = false;
-  const xrSession = renderer.xr.getSession();
-  if (xrSession) {
-    for (let i = 0; i < controllers.length; i++) {
-      const ray = controllers[i];
-      ray.getWorldPosition(_ctrlPos);
-      ray.getWorldDirection(_ctrlDir);
-      vrRaycaster.set(_ctrlPos, _ctrlDir);
-      const hits = vrRaycaster.intersectObject(vrBtnHitSphere);
-      const hit = hits.length > 0;
-      if (hit) vrBtnHovered = true;
-      if (rayLines[i]) {
-        rayLines[i].material.color.set(hit ? 0x00ff88 : 0x88ccff);
-        rayLines[i].material.opacity = hit ? 1.0 : 0.6;
-      }
-    }
-  }
-
-  // Idle "breathing" pulse (always on) plus a hover boost, so the orb reads
-  // as clickable whether or not a controller ray is currently on it
-  const breathe = 1.0 + Math.sin(cosmicElapsed * 2.2) * 0.04;
-  const targetScale = (vrBtnHovered ? 1.3 : 1.0) * breathe;
-  vrBtnGroup.scale.lerp(new THREE.Vector3(targetScale, targetScale, targetScale), 0.15);
-
-  vrBtnSphere.material.opacity = vrBtnHovered ? 0.55 : 0.28;
-  vrBtnGlow.material.opacity   = vrBtnHovered ? 0.35 : 0.18;
-  vrBtnRing.material.opacity   = vrBtnHovered ? 0.9  : 0.55;
-  vrBtnRing.material.color.set(vrBtnHovered ? 0xffffff : 0x00ffff);
+  // Proximity info sign — billboard to face the camera (world quaternion,
+  // since the sign is a direct child of the scene, not the player rig) and
+  // fade in/out purely based on distance from the player. No aiming or
+  // button press involved at all.
+  camera.getWorldQuaternion(signGroup.quaternion);
+  const distToSign = player.position.distanceTo(signGroup.position);
+  let signTarget;
+  if (distToSign < SIGN_SHOW_DIST) signTarget = 1;
+  else if (distToSign > SIGN_HIDE_DIST) signTarget = 0;
+  else signTarget = 1 - (distToSign - SIGN_SHOW_DIST) / (SIGN_HIDE_DIST - SIGN_SHOW_DIST);
+  signMesh.material.opacity += (signTarget - signMesh.material.opacity) * 0.1;
+  signMesh.visible = signMesh.material.opacity > 0.01;
 
   renderer.render(scene, camera);
 });
