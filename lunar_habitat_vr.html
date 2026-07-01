@@ -515,11 +515,11 @@ fetch('./cosmic_tracks.bin')
       col.r = Math.min(1, col.r); col.g = Math.min(1, col.g); col.b = Math.min(1, col.b);
 
       // Stagger start times + loop cycle, random per track (same feel as before)
-      const duration = 0.35 + Math.random() * 0.5; // streak draw-in time (s)
-      const startT   = Math.random() * 6.0;         // staggered entry
-      const holdT    = 1.0 + Math.random() * 1.5;   // how long it stays visible
-      const fadeT    = 0.3 + Math.random() * 0.3;   // fade-out duration (2x faster)
-      const gapT     = Math.random() * LOOP;        // pause before the track loops again
+      const duration = (0.35 + Math.random() * 0.5) / 2;  // streak draw-in time (s)
+      const startT   = Math.random() * 6.0;                // staggered entry
+      const holdT    = (1.0 + Math.random() * 1.5) / 2;    // how long it stays visible
+      const fadeT    = (0.3 + Math.random() * 0.3) / 2;    // fade-out duration
+      const gapT     = Math.random() * LOOP;               // pause before the track loops again
       const cycle    = duration + holdT + fadeT + gapT;
 
       const segCount = numPoints - 1;
