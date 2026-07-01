@@ -490,77 +490,84 @@ fetch('./cosmic_tracks.bin')
     let offset = 4; // skip u32 numTracks
     const numTracks = dv.getUint32(0, true);
 
-    // First pass: record each track's byte offsets and tally total segments
-    // (a track with N points draws as N-1 two-vertex segments).
-    const trackMeta = [];
-    let totalSegments = 0;
-    for (let i = 0; i < numTracks; i++) {
-      const numPoints = dv.getUint16(offset, true); offset += 2;
-      const colorOffset = offset; offset += 12;
-      const pointsOffset = offset; offset += numPoints * 12;
-      trackMeta.push({ numPoints, colorOffset, pointsOffset });
-      if (numPoints >= 2) totalSegments += numPoints - 1;
-    }
-
-    const totalVerts = totalSegments * 2;
-    const positions = new Float32Array(totalVerts * 3);
-    const colors    = new Float32Array(totalVerts * 3);
-    const segFrac   = new Float32Array(totalVerts);
-    const timing    = new Float32Array(totalVerts * 4); // start, duration, hold, fade
-    const cycleArr  = new Float32Array(totalVerts);
+    // Single pass: read each track's points in full (needed to find each
+    // track's origin height and clip anything that rises above it), then
+    // build segments. Sizes aren't known up front once clipping is in play,
+    // so we accumulate into plain arrays and convert to typed arrays at the end.
+    const positions = [];
+    const colors    = [];
+    const segFrac   = [];
+    const timing    = [];
+    const cycleArr  = [];
+    let trackCount = 0;
 
     const LOOP = 8.0; // extra random gap (s) added to each track's loop cycle
-    let v = 0;
-    for (const { numPoints, colorOffset, pointsOffset } of trackMeta) {
-      if (numPoints < 2) continue;
+    for (let i = 0; i < numTracks; i++) {
+      const numPoints = dv.getUint16(offset, true); offset += 2;
+      const r = dv.getFloat32(offset,     true);
+      const g = dv.getFloat32(offset + 4, true);
+      const b = dv.getFloat32(offset + 8, true);
+      offset += 12;
 
-      const r = dv.getFloat32(colorOffset,     true);
-      const g = dv.getFloat32(colorOffset + 4, true);
-      const b = dv.getFloat32(colorOffset + 8, true);
+      // Read all points for this track, transformed to world space:
+      // orig (x,y,z) -> world (x, z, -y)
+      const pts = new Array(numPoints);
+      for (let p = 0; p < numPoints; p++) {
+        const base = offset + p * 12;
+        const ox = dv.getFloat32(base,     true);
+        const oy = dv.getFloat32(base + 4, true);
+        const oz = dv.getFloat32(base + 8, true);
+        pts[p] = [ox, oz, -oy];
+      }
+      offset += numPoints * 12;
+
+      if (numPoints < 2) continue;
+      trackCount++;
+
       // Boost brightness — raw Geant4 colors are often muted
       const col = new THREE.Color(r, g, b).multiplyScalar(1.6);
       col.r = Math.min(1, col.r); col.g = Math.min(1, col.g); col.b = Math.min(1, col.b);
 
       // Stagger start times + loop cycle, random per track (same feel as before)
-      const duration = (0.35 + Math.random() * 0.5) / 2;  // streak draw-in time (s)
-      const startT   = Math.random() * 6.0;                // staggered entry
-      const holdT    = (1.0 + Math.random() * 1.5) / 2;    // how long it stays visible
-      const fadeT    = (0.3 + Math.random() * 0.3) / 2;    // fade-out duration
-      const gapT     = Math.random() * LOOP;               // pause before the track loops again
-      const cycle    = duration + holdT + fadeT + gapT;
+      const duration   = (0.35 + Math.random() * 0.5) / 2;  // streak draw-in time (s)
+      const startT     = Math.random() * 6.0;                // staggered entry
+      let   holdT      = (1.0 + Math.random() * 1.5) / 2;    // how long it stays visible
+      let   fadeT      = (0.3 + Math.random() * 0.3) / 2;    // fade-out duration
+      // Make the fade twice as slow (more gradual) without changing the total
+      // on-screen lifetime — steal the extra fade time from the hold phase.
+      const fadeIncrease = fadeT;
+      fadeT += fadeIncrease;
+      holdT = Math.max(0.05, holdT - fadeIncrease);
+      const gapT       = Math.random() * LOOP;               // pause before the track loops again
+      const cycle      = duration + holdT + fadeT + gapT;
+
+      // Origin height = where this track starts; clip any segment that
+      // extends above it (e.g. backscatter arcing upward past the start).
+      const originY = pts[0][1];
+      const EPS = 0.01; // 1cm tolerance
 
       const segCount = numPoints - 1;
       for (let s = 0; s < segCount; s++) {
-        const frac = s / segCount;
-        for (let e = 0; e < 2; e++) {
-          const p = s + e;
-          const base = pointsOffset + p * 12;
-          const ox = dv.getFloat32(base,     true);
-          const oy = dv.getFloat32(base + 4, true);
-          const oz = dv.getFloat32(base + 8, true);
-          // Apply same axis transform as the main WRL object: (x,y,z) -> (x, z, -y)
-          positions[v * 3 + 0] = ox;
-          positions[v * 3 + 1] = oz;
-          positions[v * 3 + 2] = -oy;
+        const p0 = pts[s], p1 = pts[s + 1];
+        if (p0[1] > originY + EPS || p1[1] > originY + EPS) continue;
 
-          colors[v * 3 + 0] = col.r; colors[v * 3 + 1] = col.g; colors[v * 3 + 2] = col.b;
-          segFrac[v] = frac;
-          timing[v * 4 + 0] = startT;
-          timing[v * 4 + 1] = duration;
-          timing[v * 4 + 2] = holdT;
-          timing[v * 4 + 3] = fadeT;
-          cycleArr[v] = cycle;
-          v++;
+        const frac = s / segCount;
+        for (const p of [p0, p1]) {
+          positions.push(p[0], p[1], p[2]);
+          colors.push(col.r, col.g, col.b);
+          segFrac.push(frac);
+          timing.push(startT, duration, holdT, fadeT);
+          cycleArr.push(cycle);
         }
       }
     }
 
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geo.setAttribute('aColor',   new THREE.BufferAttribute(colors, 3));
-    geo.setAttribute('aSeg',     new THREE.BufferAttribute(segFrac, 1));
-    geo.setAttribute('aTiming',  new THREE.BufferAttribute(timing, 4));
-    geo.setAttribute('aCycle',   new THREE.BufferAttribute(cycleArr, 1));
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+    geo.setAttribute('aColor',   new THREE.BufferAttribute(new Float32Array(colors), 3));
+    geo.setAttribute('aSeg',     new THREE.BufferAttribute(new Float32Array(segFrac), 1));
+    geo.setAttribute('aTiming',  new THREE.BufferAttribute(new Float32Array(timing), 4));
+    geo.setAttribute('aCycle',   new THREE.BufferAttribute(new Float32Array(cycleArr), 1));
 
     cosmicMaterial = new THREE.ShaderMaterial({
       uniforms: {
@@ -618,7 +625,7 @@ fetch('./cosmic_tracks.bin')
     });
 
     scene.add(new THREE.LineSegments(geo, cosmicMaterial));
-    console.log(`Cosmic ray tracks loaded: ${trackMeta.length} tracks, ${totalVerts} vertices, 1 draw call`);
+    console.log(`Cosmic ray tracks loaded: ${trackCount} tracks, ${positions.length / 3} vertices, 1 draw call`);
   })
   .catch(err => console.warn('Cosmic ray tracks not loaded:', err));
 // ────────────────────────────────────────────────────────────────────────────
@@ -743,6 +750,31 @@ const signMesh = new THREE.Mesh(
   new THREE.MeshBasicMaterial({ map: signTex, transparent: true, opacity: 0, depthWrite: false })
 );
 signGroup.add(signMesh);
+
+// Long-range beacon — the text panel is only legible up close, so this is a
+// separate always-on glowing marker (bypasses fog via fog:false) plus a
+// point light, so the sign is easy to spot from well across the shaft/tunnel
+// long before you're close enough to read it.
+const beaconCore = new THREE.Mesh(
+  new THREE.SphereGeometry(0.6, 16, 16),
+  new THREE.MeshBasicMaterial({
+    color: 0x00ffff, transparent: true, opacity: 0.9, depthWrite: false,
+    blending: THREE.AdditiveBlending, fog: false,
+  })
+);
+signGroup.add(beaconCore);
+
+const beaconGlow = new THREE.Mesh(
+  new THREE.SphereGeometry(1.6, 16, 16),
+  new THREE.MeshBasicMaterial({
+    color: 0x00e6e6, transparent: true, opacity: 0.35, depthWrite: false,
+    side: THREE.BackSide, blending: THREE.AdditiveBlending, fog: false,
+  })
+);
+signGroup.add(beaconGlow);
+
+const beaconLight = new THREE.PointLight(0x00cccc, 6, 60); // bright, 60m range
+signGroup.add(beaconLight);
 
 // ────────────────────────────────────────────────────────────────────────────
 // Boundary — HabitatAtm in world metres (post -π/2 X-rotation frame)
@@ -886,18 +918,35 @@ renderer.setAnimationLoop(() => {
     }
   }
 
-  // Proximity info sign — billboard to face the camera (world quaternion,
-  // since the sign is a direct child of the scene, not the player rig) and
-  // fade in/out purely based on distance from the player. No aiming or
-  // button press involved at all.
-  camera.getWorldQuaternion(signGroup.quaternion);
-  const distToSign = player.position.distanceTo(signGroup.position);
-  let signTarget;
-  if (distToSign < SIGN_SHOW_DIST) signTarget = 1;
-  else if (distToSign > SIGN_HIDE_DIST) signTarget = 0;
-  else signTarget = 1 - (distToSign - SIGN_SHOW_DIST) / (SIGN_HIDE_DIST - SIGN_SHOW_DIST);
-  signMesh.material.opacity += (signTarget - signMesh.material.opacity) * 0.1;
-  signMesh.visible = signMesh.material.opacity > 0.01;
+  // Proximity info sign — VR only. Billboard to face the camera (world
+  // quaternion, since the sign is a direct child of the scene, not the
+  // player rig) and fade in/out purely based on distance from the player.
+  // No aiming or button press needed. The beacon (core + glow + light)
+  // pulses continuously and stays fully visible regardless of distance, so
+  // it's findable from well outside the text panel's legible range.
+  if (renderer.xr.isPresenting) {
+    camera.getWorldQuaternion(signGroup.quaternion);
+    const distToSign = player.position.distanceTo(signGroup.position);
+    let signTarget;
+    if (distToSign < SIGN_SHOW_DIST) signTarget = 1;
+    else if (distToSign > SIGN_HIDE_DIST) signTarget = 0;
+    else signTarget = 1 - (distToSign - SIGN_SHOW_DIST) / (SIGN_HIDE_DIST - SIGN_SHOW_DIST);
+    signMesh.material.opacity += (signTarget - signMesh.material.opacity) * 0.1;
+    signMesh.visible = signMesh.material.opacity > 0.01;
+
+    const pulse = 1.0 + Math.sin(cosmicElapsed * 2.0) * 0.15;
+    beaconCore.scale.setScalar(pulse);
+    beaconGlow.scale.setScalar(pulse);
+    beaconCore.visible = true;
+    beaconGlow.visible = true;
+    beaconLight.visible = true;
+  } else {
+    signMesh.visible = false;
+    signMesh.material.opacity = 0;
+    beaconCore.visible = false;
+    beaconGlow.visible = false;
+    beaconLight.visible = false;
+  }
 
   renderer.render(scene, camera);
 });

@@ -751,6 +751,31 @@ const signMesh = new THREE.Mesh(
 );
 signGroup.add(signMesh);
 
+// Long-range beacon — the text panel is only legible up close, so this is a
+// separate always-on glowing marker (bypasses fog via fog:false) plus a
+// point light, so the sign is easy to spot from well across the shaft/tunnel
+// long before you're close enough to read it.
+const beaconCore = new THREE.Mesh(
+  new THREE.SphereGeometry(0.6, 16, 16),
+  new THREE.MeshBasicMaterial({
+    color: 0x00ffff, transparent: true, opacity: 0.9, depthWrite: false,
+    blending: THREE.AdditiveBlending, fog: false,
+  })
+);
+signGroup.add(beaconCore);
+
+const beaconGlow = new THREE.Mesh(
+  new THREE.SphereGeometry(1.6, 16, 16),
+  new THREE.MeshBasicMaterial({
+    color: 0x00e6e6, transparent: true, opacity: 0.35, depthWrite: false,
+    side: THREE.BackSide, blending: THREE.AdditiveBlending, fog: false,
+  })
+);
+signGroup.add(beaconGlow);
+
+const beaconLight = new THREE.PointLight(0x00cccc, 6, 60); // bright, 60m range
+signGroup.add(beaconLight);
+
 // ────────────────────────────────────────────────────────────────────────────
 // Boundary — HabitatAtm in world metres (post -π/2 X-rotation frame)
 //
@@ -896,7 +921,9 @@ renderer.setAnimationLoop(() => {
   // Proximity info sign — VR only. Billboard to face the camera (world
   // quaternion, since the sign is a direct child of the scene, not the
   // player rig) and fade in/out purely based on distance from the player.
-  // No aiming or button press involved at all.
+  // No aiming or button press needed. The beacon (core + glow + light)
+  // pulses continuously and stays fully visible regardless of distance, so
+  // it's findable from well outside the text panel's legible range.
   if (renderer.xr.isPresenting) {
     camera.getWorldQuaternion(signGroup.quaternion);
     const distToSign = player.position.distanceTo(signGroup.position);
@@ -906,9 +933,19 @@ renderer.setAnimationLoop(() => {
     else signTarget = 1 - (distToSign - SIGN_SHOW_DIST) / (SIGN_HIDE_DIST - SIGN_SHOW_DIST);
     signMesh.material.opacity += (signTarget - signMesh.material.opacity) * 0.1;
     signMesh.visible = signMesh.material.opacity > 0.01;
+
+    const pulse = 1.0 + Math.sin(cosmicElapsed * 2.0) * 0.15;
+    beaconCore.scale.setScalar(pulse);
+    beaconGlow.scale.setScalar(pulse);
+    beaconCore.visible = true;
+    beaconGlow.visible = true;
+    beaconLight.visible = true;
   } else {
     signMesh.visible = false;
     signMesh.material.opacity = 0;
+    beaconCore.visible = false;
+    beaconGlow.visible = false;
+    beaconLight.visible = false;
   }
 
   renderer.render(scene, camera);
