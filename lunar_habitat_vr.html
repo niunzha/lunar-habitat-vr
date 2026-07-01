@@ -98,6 +98,13 @@
     }
     #info-img-block a { color: #008888; }
     @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+    /* Desktop-only chrome — hidden while a VR session is presenting via
+       dom-overlay; the in-scene "?" mesh + XR controller ray take over. */
+    body.xr-active #hud,
+    body.xr-active #info-btn,
+    body.xr-active #info-tooltip,
+    body.xr-active #boundary-warn { display: none !important; }
   </style>
 </head>
 <body>
@@ -164,6 +171,16 @@ const INFO_TEXT =
 `and hold temperature near 17°C —\n` +
 `stable enough for humans to live here.\n` +
 `\n` +
+`RADIATION RAY COLOR KEY\n` +
+`(Geant4 cosmic-ray shower, drawByParticleID)\n` +
+`\n` +
+`● Red      — Gamma ray (γ)\n` +
+`● Blue     — Electron (e−)\n` +
+`● Brown    — Positron (e+)\n` +
+`● Yellow   — Proton (p)\n` +
+`● Magenta  — Neutron (n)\n` +
+`● Gray     — Other secondaries (e.g. muons)\n` +
+`\n` +
 `──────────────────────────\n` +
 `Sky: spacespheremaps.com/hdr-spheremaps\n` +
 `Moon surface: svs.gsfc.nasa.gov/4720\n`;
@@ -216,7 +233,6 @@ window.addEventListener('keydown', (e) => {
 
 <script type="module">
 import * as THREE from 'three';
-import { VRButton }                  from 'three/addons/webxr/VRButton.js';
 import { XRControllerModelFactory }  from 'three/addons/webxr/XRControllerModelFactory.js';
 import { VRMLLoader }                from 'three/addons/loaders/VRMLLoader.js';
 import { RGBELoader }                from 'three/addons/loaders/RGBELoader.js';
@@ -229,7 +245,95 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.xr.enabled = true;
 document.body.appendChild(renderer.domElement);
-document.body.appendChild(VRButton.createButton(renderer));
+
+// Custom VR button (based on three.js's VRButton) that additionally requests
+// the 'dom-overlay' feature — without it, the Quest browser never renders the
+// page's HTML while presenting, so the "?" info panel would stay invisible
+// in the headset even though the controller click reaches it.
+function createVRButton(renderer) {
+  const button = document.createElement('button');
+
+  function stylize(el) {
+    el.style.position = 'absolute';
+    el.style.bottom = '20px';
+    el.style.padding = '12px 6px';
+    el.style.border = '1px solid #fff';
+    el.style.borderRadius = '4px';
+    el.style.background = 'rgba(0,0,0,0.1)';
+    el.style.color = '#fff';
+    el.style.font = 'normal 13px sans-serif';
+    el.style.textAlign = 'center';
+    el.style.opacity = '0.5';
+    el.style.outline = 'none';
+    el.style.zIndex = '999';
+  }
+
+  const sessionInit = {
+    optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', 'layers', 'dom-overlay'],
+    domOverlay: { root: document.body },
+  };
+
+  let currentSession = null;
+
+  async function onSessionStarted(session) {
+    session.addEventListener('end', onSessionEnded);
+    await renderer.xr.setSession(session);
+    document.body.classList.add('xr-active');
+    button.textContent = 'EXIT VR';
+    currentSession = session;
+  }
+
+  function onSessionEnded() {
+    currentSession.removeEventListener('end', onSessionEnded);
+    document.body.classList.remove('xr-active');
+    button.textContent = 'ENTER VR';
+    currentSession = null;
+  }
+
+  button.style.display = 'none';
+  stylize(button);
+  button.style.cursor = 'pointer';
+  button.style.left = 'calc(50% - 50px)';
+  button.style.width = '100px';
+
+  if (!('xr' in navigator)) {
+    button.textContent = window.isSecureContext ? 'WEBXR NOT AVAILABLE' : 'WEBXR NEEDS HTTPS';
+    button.style.display = '';
+    button.style.cursor = 'auto';
+    button.style.left = 'calc(50% - 90px)';
+    button.style.width = '180px';
+    return button;
+  }
+
+  navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
+    if (!supported) {
+      button.textContent = 'VR NOT SUPPORTED';
+      button.style.display = '';
+      button.style.cursor = 'auto';
+      button.style.left = 'calc(50% - 75px)';
+      button.style.width = '150px';
+      return;
+    }
+    button.textContent = 'ENTER VR';
+    button.style.display = '';
+    button.onclick = () => {
+      if (currentSession === null) {
+        navigator.xr.requestSession('immersive-vr', sessionInit).then(onSessionStarted);
+      } else {
+        currentSession.end();
+      }
+    };
+  }).catch((e) => {
+    console.warn('Exception when trying to call xr.isSessionSupported', e);
+    button.textContent = 'VR NOT ALLOWED';
+    button.style.display = '';
+    button.style.cursor = 'auto';
+  });
+
+  return button;
+}
+
+document.body.appendChild(createVRButton(renderer));
 
 // ────────────────────────────────────────────────────────────────────────────
 // Scene
@@ -357,7 +461,9 @@ new THREE.TextureLoader().load('./surface.jpg', (tex) => {
 });
 
 // ────────────────────────────────────────────────────────────────────────────
-// Cosmic ray tracks — animated particle trails from g4_1000CRevts.wrl
+// Cosmic ray tracks — animated particle trails from g4_500CRevts.wrl
+// (rebuilt into cosmic_tracks.bin via scripts/build_cosmic_tracks.py; track
+// colors follow the drawByParticleID scheme set in LavaTube.mac)
 // Binary format: u32 numTracks; per track: u16 numPoints, f32x3 color, then
 // numPoints * f32x3 points (already scaled mm→m, in ORIGINAL Geant4 axes)
 // World transform matches the WRL loader: orig (x,y,z) → world (x, z, -y)
