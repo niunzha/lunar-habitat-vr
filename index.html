@@ -518,7 +518,7 @@ fetch('./cosmic_tracks.bin')
       const duration = 0.35 + Math.random() * 0.5; // streak draw-in time (s)
       const startT   = Math.random() * 6.0;         // staggered entry
       const holdT    = 1.0 + Math.random() * 1.5;   // how long it stays visible
-      const fadeT    = 0.6 + Math.random() * 0.6;   // fade-out duration
+      const fadeT    = 0.3 + Math.random() * 0.3;   // fade-out duration (2x faster)
       const gapT     = Math.random() * LOOP;        // pause before the track loops again
       const cycle    = duration + holdT + fadeT + gapT;
 
@@ -711,38 +711,65 @@ addController(0);
 addController(1);
 
 // ────────────────────────────────────────────────────────────────────────────
-// Floating VR "?" info button — sits 1m above the habitat top (y = -70)
-// Clickable by Quest 3 ray controllers via raycasting
+// Floating VR "?" info button — an interactive glowing orb 1m above the
+// habitat top (y = -70). Ray-clickable from either controller's front trigger.
+// The sphere is the raycast target; a glow shell + spinning halo ring signal
+// "this is interactive" even before a controller ray touches it, and both
+// brighten further on hover.
 // ────────────────────────────────────────────────────────────────────────────
+const vrBtnGroup = new THREE.Group();
+vrBtnGroup.position.set(0, -69, 0); // 1m above habitat top at y=-70
+scene.add(vrBtnGroup);
 
-// Draw a "?" onto a canvas texture
+// Interactive hit-target — the sphere the controller ray is tested against
+const vrBtnSphere = new THREE.Mesh(
+  new THREE.SphereGeometry(0.9, 32, 32),
+  new THREE.MeshBasicMaterial({ color: 0x00c8c8, transparent: true, opacity: 0.28, depthWrite: false })
+);
+vrBtnGroup.add(vrBtnSphere);
+
+// Outer fresnel-style glow shell (visual only, not part of the raycast target)
+const vrBtnGlow = new THREE.Mesh(
+  new THREE.SphereGeometry(1.05, 32, 32),
+  new THREE.MeshBasicMaterial({
+    color: 0x00e6e6, transparent: true, opacity: 0.18, depthWrite: false,
+    side: THREE.BackSide, blending: THREE.AdditiveBlending,
+  })
+);
+vrBtnGroup.add(vrBtnGlow);
+
+// Slowly spinning halo ring — a constant "this is clickable" affordance
+const vrBtnRing = new THREE.Mesh(
+  new THREE.TorusGeometry(1.3, 0.035, 8, 64),
+  new THREE.MeshBasicMaterial({
+    color: 0x00ffff, transparent: true, opacity: 0.55, depthWrite: false,
+    blending: THREE.AdditiveBlending,
+  })
+);
+vrBtnGroup.add(vrBtnRing);
+
+// "?" label + trigger hint, drawn on a canvas texture, sits just outside the
+// sphere surface and shares the group's billboard rotation
 const btnCanvas = document.createElement('canvas');
 btnCanvas.width = 256; btnCanvas.height = 256;
 const btnCtx = btnCanvas.getContext('2d');
 btnCtx.clearRect(0, 0, 256, 256);
-btnCtx.beginPath();
-btnCtx.arc(128, 128, 120, 0, Math.PI * 2);
-btnCtx.fillStyle = 'rgba(0,180,180,0.18)';
-btnCtx.fill();
-btnCtx.strokeStyle = 'rgba(0,210,210,0.85)';
-btnCtx.lineWidth = 8;
-btnCtx.stroke();
 btnCtx.fillStyle = '#00c8c8';
 btnCtx.font = 'bold 140px monospace';
 btnCtx.textAlign = 'center';
 btnCtx.textBaseline = 'middle';
-btnCtx.fillText('?', 128, 128);
-btnCtx.font = '28px monospace';
-btnCtx.fillStyle = 'rgba(0,200,200,0.7)';
-btnCtx.fillText('[ trigger ]', 128, 222);
+btnCtx.fillText('?', 128, 118);
+btnCtx.font = '26px monospace';
+btnCtx.fillStyle = 'rgba(0,220,220,0.85)';
+btnCtx.fillText('[ trigger ]', 128, 214);
 
 const btnTex = new THREE.CanvasTexture(btnCanvas);
-const vrBtn = new THREE.Mesh(
-  new THREE.PlaneGeometry(3, 3),
-  new THREE.MeshBasicMaterial({ map: btnTex, transparent: true, side: THREE.DoubleSide, depthWrite: false })
+const vrBtnLabel = new THREE.Mesh(
+  new THREE.PlaneGeometry(1.6, 1.6),
+  new THREE.MeshBasicMaterial({ map: btnTex, transparent: true, depthWrite: false })
 );
-vrBtn.position.set(0, -69, 0); // 1m above habitat top at y=-70
-scene.add(vrBtn);
+vrBtnLabel.position.z = 0.95; // just outside the sphere, facing the camera
+vrBtnGroup.add(vrBtnLabel);
 
 // Raycaster for VR controller interaction
 const vrRaycaster = new THREE.Raycaster();
@@ -764,7 +791,7 @@ function tryClickVrBtn(ctrlIndex) {
   ray.getWorldPosition(_ctrlPos);
   ray.getWorldDirection(_ctrlDir);
   vrRaycaster.set(_ctrlPos, _ctrlDir);
-  const hits = vrRaycaster.intersectObject(vrBtn);
+  const hits = vrRaycaster.intersectObject(vrBtnSphere);
   if (hits.length > 0) {
     vrBtnCooldown = 0.8;
     document.getElementById('info-btn').click();
@@ -933,8 +960,10 @@ renderer.setAnimationLoop(() => {
     }
   }
 
-  // Billboard VR button to always face camera
-  vrBtn.quaternion.copy(camera.quaternion);
+  // Billboard VR button group to always face camera
+  vrBtnGroup.quaternion.copy(camera.quaternion);
+  // Continuous slow spin on the halo ring — reads as "interactive" at a glance
+  vrBtnRing.rotation.z += dt * 0.6;
 
   // VR controller ray hover detection for visual feedback
   if (vrBtnCooldown > 0) vrBtnCooldown -= dt;
@@ -946,15 +975,21 @@ renderer.setAnimationLoop(() => {
       ray.getWorldPosition(_ctrlPos);
       ray.getWorldDirection(_ctrlDir);
       vrRaycaster.set(_ctrlPos, _ctrlDir);
-      const hits = vrRaycaster.intersectObject(vrBtn);
+      const hits = vrRaycaster.intersectObject(vrBtnSphere);
       if (hits.length > 0) vrBtnHovered = true;
     }
   }
 
-  // Hover effect — scale up and brighten when ray is pointing at button
-  const targetScale = vrBtnHovered ? 1.25 : 1.0;
-  vrBtn.scale.lerp(new THREE.Vector3(targetScale, targetScale, targetScale), 0.15);
-  vrBtn.material.opacity = vrBtnHovered ? 1.0 : 0.85;
+  // Idle "breathing" pulse (always on) plus a hover boost, so the orb reads
+  // as clickable whether or not a controller ray is currently on it
+  const breathe = 1.0 + Math.sin(cosmicElapsed * 2.2) * 0.04;
+  const targetScale = (vrBtnHovered ? 1.3 : 1.0) * breathe;
+  vrBtnGroup.scale.lerp(new THREE.Vector3(targetScale, targetScale, targetScale), 0.15);
+
+  vrBtnSphere.material.opacity = vrBtnHovered ? 0.55 : 0.28;
+  vrBtnGlow.material.opacity   = vrBtnHovered ? 0.35 : 0.18;
+  vrBtnRing.material.opacity   = vrBtnHovered ? 0.9  : 0.55;
+  vrBtnRing.material.color.set(vrBtnHovered ? 0xffffff : 0x00ffff);
 
   renderer.render(scene, camera);
 });
