@@ -460,9 +460,14 @@ new RGBELoader().load('./sky.hdr', (tex) => {
 // ────────────────────────────────────────────────────────────────────────────
 new THREE.TextureLoader().load('./surface.jpg', (tex) => {
   tex.colorSpace = THREE.SRGBColorSpace;
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.RepeatWrapping;
-  tex.repeat.set(6, 6);
+  // Single image, no tiling: RingGeometry's planar UVs span the full disc,
+  // so one image covers the surface with the pit hole at its center.
+  // The source is 2048x1024 (2:1), so use the center square to keep the
+  // texture undistorted (u: 0.25–0.75 of the image, full v).
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.repeat.set(0.5, 1);
+  tex.offset.set(0.25, 0);
   const geo = new THREE.RingGeometry(50, 1800, 128, 1);
   const mat = new THREE.MeshBasicMaterial({
     map: tex, side: THREE.FrontSide, depthWrite: true, fog: false,
