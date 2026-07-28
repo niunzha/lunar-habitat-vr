@@ -337,6 +337,13 @@ function createVRButton(renderer) {
     button.style.cursor = 'auto';
   });
 
+  // Seamless VR re-entry when arriving from another VR page (Quest browser)
+  navigator.xr.addEventListener('sessiongranted', () => {
+    if (currentSession === null) {
+      navigator.xr.requestSession('immersive-vr', sessionInit).then(onSessionStarted);
+    }
+  });
+
   return button;
 }
 
@@ -714,8 +721,62 @@ function addController(index) {
   return ray;
 }
 
-addController(0);
-addController(1);
+// ────────────────────────────────────────────────────────────────────────────
+// In-VR portal button — switch to Body X-Ray
+// ────────────────────────────────────────────────────────────────────────────
+function makePortalPanel(title, sub) {
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 192;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgba(0,10,12,0.88)';
+  g.fillRect(0, 0, 512, 192);
+  g.strokeStyle = 'rgba(0,200,200,0.9)';
+  g.lineWidth = 6;
+  g.strokeRect(6, 6, 500, 180);
+  g.fillStyle = '#7df';
+  g.font = 'bold 46px monospace';
+  g.textAlign = 'center';
+  g.fillText(title, 256, 82);
+  g.fillStyle = '#9aa0b8';
+  g.font = '26px monospace';
+  g.fillText(sub, 256, 142);
+  const tex = new THREE.CanvasTexture(c);
+  const mesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.42, 0.158),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false })
+  );
+  mesh.renderOrder = 999;
+  return mesh;
+}
+
+const portalPanel = makePortalPanel('⇄ BODY X-RAY', 'point + trigger to switch');
+portalPanel.position.set(0.55, 1.25, -0.9);
+portalPanel.rotation.y = -0.35;
+portalPanel.visible = false;
+player.add(portalPanel);
+
+const portalRaycaster = new THREE.Raycaster();
+const portalMat4 = new THREE.Matrix4();
+
+function onPortalSelect(e) {
+  const ctl = e.target;
+  portalMat4.identity().extractRotation(ctl.matrixWorld);
+  portalRaycaster.ray.origin.setFromMatrixPosition(ctl.matrixWorld);
+  portalRaycaster.ray.direction.set(0, 0, -1).applyMatrix4(portalMat4);
+  if (portalRaycaster.intersectObject(portalPanel, false).length) {
+    window.location.href = 'body-xray.html';
+  }
+}
+
+const portalLaserGeo = new THREE.BufferGeometry().setFromPoints(
+  [new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -3)]);
+const portalLaserMat = new THREE.LineBasicMaterial({ color: 0x00c8c8, transparent: true, opacity: 0.5 });
+
+for (const idx of [0, 1]) {
+  const ray = addController(idx);
+  ray.add(new THREE.Line(portalLaserGeo, portalLaserMat));
+  ray.addEventListener('select', onPortalSelect);
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 // Proximity info sign — same content as the desktop "?" panel (including the
@@ -828,6 +889,8 @@ let cosmicElapsed = 0;
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05); // cap at 50 ms
   cosmicElapsed += dt;
+
+  portalPanel.visible = renderer.xr.isPresenting;
   if (cosmicMaterial) cosmicMaterial.uniforms.uTime.value = cosmicElapsed;
 
   _delta.set(0, 0, 0);

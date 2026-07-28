@@ -349,6 +349,77 @@
     }
   });
 
+  // --- Seamless VR re-entry when arriving from another VR page (Quest browser) ---
+  if(navigator.xr && navigator.xr.addEventListener){
+    navigator.xr.addEventListener('sessiongranted', async ()=>{
+      if(currentSession) return;
+      try{
+        const session = await navigator.xr.requestSession('immersive-vr', {
+          optionalFeatures:['local-floor','bounded-floor']
+        });
+        currentSession = session;
+        session.addEventListener('end', onSessionEnded);
+        await renderer.xr.setSession(session);
+        vrButton.textContent = 'Exit VR';
+      }catch(err){ /* fall back to the Enter VR button */ }
+    });
+  }
+
+  // --- In-VR portal button: switch to Lunar Base ---
+  function makePortalPanel(title, sub){
+    const c = document.createElement('canvas');
+    c.width = 512; c.height = 192;
+    const g = c.getContext('2d');
+    g.fillStyle = 'rgba(8,10,24,0.88)';
+    g.fillRect(0,0,512,192);
+    g.strokeStyle = 'rgba(0,200,200,0.9)';
+    g.lineWidth = 6;
+    g.strokeRect(6,6,500,180);
+    g.fillStyle = '#7df';
+    g.font = 'bold 46px monospace';
+    g.textAlign = 'center';
+    g.fillText(title, 256, 82);
+    g.fillStyle = '#9aa0b8';
+    g.font = '26px monospace';
+    g.fillText(sub, 256, 142);
+    const tex = new THREE.CanvasTexture(c);
+    const mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.42, 0.158),
+      new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false })
+    );
+    mesh.renderOrder = 999;
+    return mesh;
+  }
+
+  const portal = makePortalPanel('⇄ LUNAR BASE', 'point + trigger to switch');
+  portal.position.set(0.55, 1.25, -0.9);
+  portal.rotation.y = -0.35;
+  portal.visible = false;
+  rig.add(portal);
+
+  // controller lasers + select handling
+  const _laserGeo = new THREE.BufferGeometry().setFromPoints(
+    [new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-3)]);
+  const _laserMat = new THREE.LineBasicMaterial({ color:0x3dfcd9, transparent:true, opacity:0.5 });
+  const _portalRaycaster = new THREE.Raycaster();
+  const _portalMat4 = new THREE.Matrix4();
+
+  function onPortalSelect(e){
+    const ctl = e.target;
+    _portalMat4.identity().extractRotation(ctl.matrixWorld);
+    _portalRaycaster.ray.origin.setFromMatrixPosition(ctl.matrixWorld);
+    _portalRaycaster.ray.direction.set(0,0,-1).applyMatrix4(_portalMat4);
+    if(_portalRaycaster.intersectObject(portal, false).length){
+      window.location.href = 'lunar_habitat_vr.html';
+    }
+  }
+  for(let i=0;i<2;i++){
+    const ctl = renderer.xr.getController(i);
+    ctl.add(new THREE.Line(_laserGeo, _laserMat));
+    ctl.addEventListener('select', onPortalSelect);
+    rig.add(ctl);
+  }
+
   // --- Quest thumbstick controller movement (matches Lunar Habitat VR) ---
   // Left stick: fly forward/back/left/right (camera-direction-based)
   // Right stick X: turn (yaw) | Right stick Y: up/down
@@ -399,6 +470,8 @@
 
     // continuous turntable spin of the lying-down body about the vertical (Y) axis
     // turntable.rotation.y = t * 0.25;
+
+    portal.visible = renderer.xr.isPresenting;
 
     if(!renderer.xr.isPresenting){
       rig.rotation.y = rigRotY;
