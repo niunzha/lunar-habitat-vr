@@ -727,32 +727,33 @@ function addController(index) {
 // ────────────────────────────────────────────────────────────────────────────
 // In-VR portal button — switch to Body X-Ray
 // ────────────────────────────────────────────────────────────────────────────
-function makePortalPanel(title, sub) {
+function makePortalTexture(title, sub, hover) {
   const c = document.createElement('canvas');
   c.width = 512; c.height = 192;
   const g = c.getContext('2d');
-  g.fillStyle = 'rgba(0,10,12,0.88)';
+  g.fillStyle = hover ? 'rgba(0,40,45,0.95)' : 'rgba(0,10,12,0.88)';
   g.fillRect(0, 0, 512, 192);
-  g.strokeStyle = 'rgba(0,200,200,0.9)';
-  g.lineWidth = 6;
+  g.strokeStyle = hover ? '#00ffff' : 'rgba(0,200,200,0.9)';
+  g.lineWidth = hover ? 10 : 6;
   g.strokeRect(6, 6, 500, 180);
-  g.fillStyle = '#7df';
+  g.fillStyle = hover ? '#ffffff' : '#7df';
   g.font = 'bold 46px monospace';
   g.textAlign = 'center';
   g.fillText(title, 256, 82);
-  g.fillStyle = '#9aa0b8';
+  g.fillStyle = hover ? '#bfefff' : '#9aa0b8';
   g.font = '26px monospace';
   g.fillText(sub, 256, 142);
-  const tex = new THREE.CanvasTexture(c);
-  const mesh = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.42, 0.158),
-    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false })
-  );
-  mesh.renderOrder = 999;
-  return mesh;
+  return new THREE.CanvasTexture(c);
 }
 
-const portalPanel = makePortalPanel('⇄ BODY X-RAY', 'point + trigger to switch');
+const portalTexNormal = makePortalTexture('⇄ BODY X-RAY', 'point + trigger to switch', false);
+const portalTexHover  = makePortalTexture('⇄ BODY X-RAY', 'pull trigger to switch', true);
+
+const portalPanel = new THREE.Mesh(
+  new THREE.PlaneGeometry(0.26, 0.0975),
+  new THREE.MeshBasicMaterial({ map: portalTexNormal, transparent: true, depthTest: false })
+);
+portalPanel.renderOrder = 999;
 portalPanel.position.set(0.55, 1.25, -0.9);
 portalPanel.rotation.y = -0.35;
 portalPanel.visible = false;
@@ -760,13 +761,18 @@ player.add(portalPanel);
 
 const portalRaycaster = new THREE.Raycaster();
 const portalMat4 = new THREE.Matrix4();
+const portalControllers = [];
+let portalHovered = false;
 
-function onPortalSelect(e) {
-  const ctl = e.target;
+function portalHit(ctl) {
   portalMat4.identity().extractRotation(ctl.matrixWorld);
   portalRaycaster.ray.origin.setFromMatrixPosition(ctl.matrixWorld);
   portalRaycaster.ray.direction.set(0, 0, -1).applyMatrix4(portalMat4);
-  if (portalRaycaster.intersectObject(portalPanel, false).length) {
+  return portalRaycaster.intersectObject(portalPanel, false).length > 0;
+}
+
+function onPortalSelect(e) {
+  if (portalHit(e.target)) {
     window.location.href = 'body-xray.html';
   }
 }
@@ -779,6 +785,7 @@ for (const idx of [0, 1]) {
   const ray = addController(idx);
   ray.add(new THREE.Line(portalLaserGeo, portalLaserMat));
   ray.addEventListener('select', onPortalSelect);
+  portalControllers.push(ray);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -894,6 +901,14 @@ renderer.setAnimationLoop(() => {
   cosmicElapsed += dt;
 
   portalPanel.visible = renderer.xr.isPresenting;
+  if (portalPanel.visible) {
+    const hovered = portalControllers.some(portalHit);
+    if (hovered !== portalHovered) {
+      portalHovered = hovered;
+      portalPanel.material.map = hovered ? portalTexHover : portalTexNormal;
+      portalPanel.scale.setScalar(hovered ? 1.12 : 1);
+    }
+  }
   if (cosmicMaterial) cosmicMaterial.uniforms.uTime.value = cosmicElapsed;
 
   _delta.set(0, 0, 0);
@@ -1003,9 +1018,15 @@ renderer.setAnimationLoop(() => {
     const pulse = 1.0 + Math.sin(cosmicElapsed * 2.0) * 0.15;
     beaconCore.scale.setScalar(pulse);
     beaconGlow.scale.setScalar(pulse);
-    beaconCore.visible = true;
-    beaconGlow.visible = true;
-    beaconLight.visible = true;
+    // Fade the beacon out as the info panel fades in, so the orb never
+    // sits in front of the text.
+    const beaconFade = 1 - signMesh.material.opacity;
+    beaconCore.material.opacity = 0.9 * beaconFade;
+    beaconGlow.material.opacity = 0.35 * beaconFade;
+    beaconLight.intensity = 6 * beaconFade;
+    beaconCore.visible = beaconFade > 0.02;
+    beaconGlow.visible = beaconFade > 0.02;
+    beaconLight.visible = beaconFade > 0.02;
   } else {
     signMesh.visible = false;
     signMesh.material.opacity = 0;

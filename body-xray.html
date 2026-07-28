@@ -366,32 +366,33 @@
   }
 
   // --- In-VR portal button: switch to Lunar Base ---
-  function makePortalPanel(title, sub){
+  function makePortalTexture(title, sub, hover){
     const c = document.createElement('canvas');
     c.width = 512; c.height = 192;
     const g = c.getContext('2d');
-    g.fillStyle = 'rgba(8,10,24,0.88)';
+    g.fillStyle = hover ? 'rgba(24,30,60,0.95)' : 'rgba(8,10,24,0.88)';
     g.fillRect(0,0,512,192);
-    g.strokeStyle = 'rgba(0,200,200,0.9)';
-    g.lineWidth = 6;
+    g.strokeStyle = hover ? '#00ffff' : 'rgba(0,200,200,0.9)';
+    g.lineWidth = hover ? 10 : 6;
     g.strokeRect(6,6,500,180);
-    g.fillStyle = '#7df';
+    g.fillStyle = hover ? '#ffffff' : '#7df';
     g.font = 'bold 46px monospace';
     g.textAlign = 'center';
     g.fillText(title, 256, 82);
-    g.fillStyle = '#9aa0b8';
+    g.fillStyle = hover ? '#bfefff' : '#9aa0b8';
     g.font = '26px monospace';
     g.fillText(sub, 256, 142);
-    const tex = new THREE.CanvasTexture(c);
-    const mesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.42, 0.158),
-      new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false })
-    );
-    mesh.renderOrder = 999;
-    return mesh;
+    return new THREE.CanvasTexture(c);
   }
 
-  const portal = makePortalPanel('⇄ LUNAR BASE', 'point + trigger to switch');
+  const portalTexNormal = makePortalTexture('⇄ LUNAR BASE', 'point + trigger to switch', false);
+  const portalTexHover  = makePortalTexture('⇄ LUNAR BASE', 'pull trigger to switch', true);
+
+  const portal = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.26, 0.0975),
+    new THREE.MeshBasicMaterial({ map: portalTexNormal, transparent: true, depthTest: false })
+  );
+  portal.renderOrder = 999;
   portal.position.set(0.55, 1.25, -0.9);
   portal.rotation.y = -0.35;
   portal.visible = false;
@@ -403,13 +404,18 @@
   const _laserMat = new THREE.LineBasicMaterial({ color:0x3dfcd9, transparent:true, opacity:0.5 });
   const _portalRaycaster = new THREE.Raycaster();
   const _portalMat4 = new THREE.Matrix4();
+  const _portalControllers = [];
+  let _portalHovered = false;
 
-  function onPortalSelect(e){
-    const ctl = e.target;
+  function portalHit(ctl){
     _portalMat4.identity().extractRotation(ctl.matrixWorld);
     _portalRaycaster.ray.origin.setFromMatrixPosition(ctl.matrixWorld);
     _portalRaycaster.ray.direction.set(0,0,-1).applyMatrix4(_portalMat4);
-    if(_portalRaycaster.intersectObject(portal, false).length){
+    return _portalRaycaster.intersectObject(portal, false).length > 0;
+  }
+
+  function onPortalSelect(e){
+    if(portalHit(e.target)){
       window.location.href = 'lunar_habitat_vr.html';
     }
   }
@@ -418,6 +424,7 @@
     ctl.add(new THREE.Line(_laserGeo, _laserMat));
     ctl.addEventListener('select', onPortalSelect);
     rig.add(ctl);
+    _portalControllers.push(ctl);
   }
 
   // --- Quest thumbstick controller movement (matches Lunar Habitat VR) ---
@@ -472,6 +479,14 @@
     // turntable.rotation.y = t * 0.25;
 
     portal.visible = renderer.xr.isPresenting;
+    if(portal.visible){
+      const hovered = _portalControllers.some(portalHit);
+      if(hovered !== _portalHovered){
+        _portalHovered = hovered;
+        portal.material.map = hovered ? portalTexHover : portalTexNormal;
+        portal.scale.setScalar(hovered ? 1.12 : 1);
+      }
+    }
 
     if(!renderer.xr.isPresenting){
       rig.rotation.y = rigRotY;
