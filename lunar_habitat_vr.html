@@ -458,16 +458,14 @@ new RGBELoader().load('./sky.hdr', (tex) => {
 // Lunar regolith surface — ring (annulus) at y=0 with pit hole cut out
 // Inner radius matches pit opening (~50m), outer radius extends to horizon
 // ────────────────────────────────────────────────────────────────────────────
-new THREE.TextureLoader().load('./surface.jpg', (tex) => {
+new THREE.TextureLoader().load('./surface_hires.jpg', (tex) => {
   tex.colorSpace = THREE.SRGBColorSpace;
   // Single image, no tiling: RingGeometry's planar UVs span the full disc,
   // so one image covers the surface with the pit hole at its center.
-  // The source is 2048x1024 (2:1), so use the center square to keep the
-  // texture undistorted (u: 0.25–0.75 of the image, full v).
+  // surface_hires.jpg is a pre-cropped 4096x4096 center square of NASA's
+  // 16k LROC color map (svs.gsfc.nasa.gov/4720), so no UV cropping needed.
   tex.wrapS = THREE.ClampToEdgeWrapping;
   tex.wrapT = THREE.ClampToEdgeWrapping;
-  tex.repeat.set(0.5, 1);
-  tex.offset.set(0.25, 0);
   const geo = new THREE.RingGeometry(50, 1800, 128, 1);
   const mat = new THREE.MeshBasicMaterial({
     map: tex, side: THREE.FrontSide, depthWrite: true, fog: false,
